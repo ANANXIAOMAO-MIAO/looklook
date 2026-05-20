@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LOOKLOOK — 文献智能速递</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+    :root {
+      --gradient-main: linear-gradient(135deg, #DDB4F6, #8DD0FC);
+      --color-purple: #DDB4F6;
+      --color-blue: #8DD0FC;
+      --bg-base: #F7F8FC;
+      --card-bg: rgba(255, 255, 255, 0.7);
+      --text-primary: #2B2F42;
+      --text-secondary: #6B7280;
+      --border-color: #E5E7EB;
+      --shadow-card: 0 10px 40px rgba(0, 0, 0, 0.08);
+      --focus-glow: 0 0 0 3px rgba(141, 208, 252, 0.25);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 400;
+      color: var(--text-primary);
+      background: var(--bg-base);
+      min-height: 100vh;
+      line-height: 1.6;
+      position: relative;
+    }
+
+    .bg-glow {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+
+    .bg-glow .glow {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(60px);
+    }
+
+    .bg-glow .glow-top {
+      top: -14%;
+      left: -10%;
+      width: min(560px, 78vw);
+      height: min(440px, 58vh);
+      background: radial-gradient(
+        ellipse at center,
+        rgba(221, 180, 246, 0.45) 0%,
+        rgba(221, 180, 246, 0.22) 42%,
+        transparent 72%
+      );
+    }
+
+    .bg-glow .glow-bottom {
+      bottom: -12%;
+      right: -8%;
+      width: min(520px, 70vw);
+      height: min(420px, 55vh);
+      background: radial-gradient(
+        ellipse at center,
+        rgba(141, 208, 252, 0.42) 0%,
+        rgba(141, 208, 252, 0.18) 48%,
+        transparent 75%
+      );
+    }
+
+    .page-wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 90px 1.5rem 3rem;
+    }
+
+    .brand-title {
+      font-family: 'Fredoka', 'Quicksand', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+      text-align: center;
+      font-size: clamp(48px, 7vw, 56px);
+      font-weight: 600;
+      background: linear-gradient(135deg, #C44AD0 0%, #8F6AD8 48%, #4A8AD4 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      color: #8F6AD8;
+      margin-bottom: 0.5rem;
+      letter-spacing: 0.03em;
+      line-height: 1.15;
+    }
+
+    .brand-subtitle {
+      text-align: center;
+      font-size: 16px;
+      color: var(--text-secondary);
+      margin-bottom: 2.5rem;
+    }
+
+    .card,
+    .card-glass,
+    .card-muted {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 20px;
+      box-shadow: var(--shadow-card);
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      padding: 24px 28px;
+      margin-bottom: 1.25rem;
+    }
+
+    @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      .card,
+      .card-glass,
+      .card-muted {
+        background: rgba(255, 255, 255, 0.96);
+      }
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 0.5rem;
+    }
+
+    label .required { color: #EF4444; }
+
+    .card-glass label + textarea,
+    .card-glass label + input,
+    .card-glass label + select {
+      margin-top: 0;
+    }
+
+    .card-glass label:not(:first-of-type) {
+      margin-top: 20px;
+    }
+
+    .card-glass .advanced-toggle {
+      margin-top: 20px;
+    }
+
+    .card-glass .btn-row {
+      margin-top: 28px;
+    }
+
+    textarea,
+    input[type="text"],
+    input[type="password"],
+    select {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      padding: 12px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      background: #FFFFFF;
+      color: var(--text-primary);
+      transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+      margin-bottom: 1rem;
+    }
+
+    .card-glass textarea,
+    .card-glass input[type="text"],
+    .card-glass input[type="password"],
+    .card-glass select {
+      margin-bottom: 0;
+    }
+
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-color: #FFFFFF;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B7280' d='M2.5 4.5L6 8l3.5-3.5'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      padding: 12px 40px 12px 14px;
+      cursor: pointer;
+    }
+
+    textarea { min-height: 120px; resize: vertical; }
+
+    textarea:focus,
+    input:focus,
+    select:focus {
+      outline: none;
+      border-color: var(--color-blue);
+      box-shadow: var(--focus-glow);
+    }
+
+    textarea:disabled,
+    input:disabled,
+    select:disabled,
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .advanced-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      width: 100%;
+      background: none;
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 0.25rem 0 0.75rem;
+      font-family: inherit;
+    }
+
+    .advanced-toggle:hover { color: var(--color-blue); }
+
+    .advanced-panel {
+      display: none;
+      padding-top: 0.25rem;
+    }
+
+    .advanced-panel.open { display: block; }
+
+    .advanced-toggle .chevron {
+      transition: transform 0.2s;
+      font-size: 12px;
+    }
+
+    .advanced-toggle.open .chevron { transform: rotate(90deg); }
+
+    .btn-row {
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      margin-top: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .btn-row.result-actions {
+      margin-top: 2rem;
+    }
+
+    .btn-primary,
+    .btn-secondary {
+      height: 44px;
+      padding: 0 28px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+      background: #250e2c;
+      color: #FFFFFF;
+    }
+
+    .btn-primary {
+      min-width: 200px;
+    }
+
+    .btn-primary:hover:not(:disabled),
+    .btn-secondary:hover:not(:disabled) {
+      background: #3a1a45;
+      transform: translateY(-2px);
+      box-shadow: 0 12px 28px rgba(37, 14, 44, 0.35);
+    }
+
+    .btn-primary:active:not(:disabled),
+    .btn-secondary:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(43, 47, 66, 0.45);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+    }
+
+    .overlay.visible {
+      display: flex;
+    }
+
+    .modal {
+      background: #FFFFFF;
+      border-radius: 20px;
+      box-shadow: var(--shadow-card), 0 8px 20px rgba(141, 208, 252, 0.15);
+      padding: 2rem 2rem 1.75rem;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+    }
+
+    .modal-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid var(--border-color);
+      border-top-color: var(--color-blue);
+      border-radius: 50%;
+      animation: spin 0.85s linear infinite;
+      margin: 0 auto 1.25rem;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 0.35rem;
+    }
+
+    .modal-estimate {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 1.5rem;
+    }
+
+    .step-track {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 0 0.25rem 1rem;
+      position: relative;
+    }
+
+    .step-track::before {
+      content: '';
+      position: absolute;
+      top: 10px;
+      left: 12px;
+      right: 12px;
+      height: 2px;
+      background: var(--border-color);
+      z-index: 0;
+    }
+
+    .step-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+      z-index: 1;
+      flex: 1;
+    }
+
+    .step-dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--border-color);
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.25s ease;
+    }
+
+    .step-item.active .step-dot,
+    .step-item.done .step-dot {
+      background: var(--gradient-main);
+      color: #FFFFFF;
+      box-shadow: 0 4px 12px rgba(141, 208, 252, 0.4);
+    }
+
+    .step-label {
+      font-size: 10px;
+      color: var(--text-secondary);
+      max-width: 56px;
+      line-height: 1.2;
+    }
+
+    .step-item.active .step-label,
+    .step-item.done .step-label {
+      color: var(--color-blue);
+      font-weight: 500;
+    }
+
+    .modal-message {
+      font-size: 14px;
+      color: var(--text-secondary);
+      min-height: 1.5em;
+      margin-bottom: 0.75rem;
+    }
+
+    .modal-timer {
+      font-size: 13px;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .modal-timer strong {
+      color: var(--color-purple);
+      font-weight: 600;
+    }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 0.75rem;
+    }
+
+    .section-title-numbered,
+    .papers-toggle-numbered {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .section-num {
+      font-family: 'Fredoka', 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--color-purple);
+      line-height: 1;
+      flex-shrink: 0;
+      letter-spacing: 0.02em;
+    }
+
+    .section-title-text {
+      flex: 1;
+    }
+
+    .papers-toggle-numbered {
+      width: 100%;
+      background: none;
+      border: none;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      cursor: pointer;
+      padding: 0;
+      font-family: inherit;
+      text-align: left;
+      margin-bottom: 0;
+    }
+
+    .papers-toggle-numbered .chevron {
+      margin-left: auto;
+      flex-shrink: 0;
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.75rem;
+      font-size: 14px;
+    }
+
+    .summary-item strong {
+      display: block;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      margin-bottom: 0.2rem;
+    }
+
+    .summary-text { color: var(--text-primary); word-break: break-word; }
+
+    .review-body {
+      font-size: 15px;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      line-height: 1.75;
+    }
+
+    .papers-list {
+      display: none;
+      margin-top: 1rem;
+    }
+
+    .papers-list.open { display: block; }
+
+    .paper-item {
+      padding: 1rem 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .paper-item:last-child { border-bottom: none; }
+
+    .paper-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 0.35rem;
+    }
+
+    .paper-seq { color: var(--text-secondary); margin-right: 0.35rem; }
+
+    .paper-score {
+      flex-shrink: 0;
+      font-size: 13px;
+      color: var(--color-blue);
+      font-weight: 500;
+    }
+
+    .paper-title-cn {
+      font-size: 14px;
+      color: var(--text-primary);
+      margin-bottom: 0.25rem;
+    }
+
+    .paper-oneliner {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .error-msg {
+      display: none;
+      background: #FEF2F2;
+      color: #B91C1C;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 14px;
+      margin-bottom: 1rem;
+    }
+
+    .error-msg.visible { display: block; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border-color);
+      margin: 1.5rem 0;
+    }
+
+    @media (min-width: 600px) {
+      .summary-grid { grid-template-columns: 1fr 1fr; }
+      .summary-grid .span-full { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true">
+    <div class="glow glow-top"></div>
+    <div class="glow glow-bottom"></div>
+  </div>
+
+  <div class="page-wrap">
+    <h1 class="brand-title">LOOKLOOK!</h1>
+    <p class="brand-subtitle">基于 OpenAlex + DeepSeek，用五分钟和感兴趣的前沿文献打个照面</p>
+
+    <div id="errorBox" class="error-msg" role="alert"></div>
+
+    <div id="inputView" class="view active">
+      <div class="card card-glass">
+        <label for="interest">个人兴趣描述 <span class="required">*</span></label>
+        <textarea id="interest" placeholder="用通俗中文描述你感兴趣的研究方向，AI 将自动扩展搜索词"></textarea>
+
+        <label for="apiKey">DeepSeek API Key <span class="required">*</span></label>
+        <input type="password" id="apiKey" placeholder="在此输入你的 DeepSeek API Key，不会存储" autocomplete="off" />
+
+        <button type="button" class="advanced-toggle" id="advancedToggle" aria-expanded="false">
+          <span class="chevron">▶</span>
+          <span>高级选项</span>
+        </button>
+        <div class="advanced-panel" id="advancedPanel">
+          <label for="keywords">关键词（可选）</label>
+          <input type="text" id="keywords" placeholder="多个关键词用逗号分隔，留空则由 AI 自动生成" />
+          <label for="journal">期刊名称（可选）</label>
+          <input type="text" id="journal" placeholder="多个期刊用逗号分隔，留空则不限制期刊" />
+          <label for="timeRange">时间范围</label>
+          <select id="timeRange">
+            <option value="一月内">一月内</option>
+            <option value="半年内">半年内</option>
+            <option value="一年内">一年内</option>
+            <option value="三年内" selected>三年内</option>
+            <option value="五年内">五年内</option>
+          </select>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn-primary" id="startBtn">开始分析</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="resultView" class="view">
+      <div class="card card-muted">
+        <h2 class="section-title section-title-numbered">
+          <span class="section-num">01</span>
+          <span class="section-title-text">本次检索摘要</span>
+        </h2>
+        <div class="summary-grid">
+          <div class="summary-item span-full">
+            <strong>个人兴趣描述</strong>
+            <span class="summary-text" id="resInterest">—</span>
+          </div>
+          <div class="summary-item">
+            <strong>扩展关键词</strong>
+            <span class="summary-text" id="resTerms">—</span>
+          </div>
+          <div class="summary-item">
+            <strong>时间范围</strong>
+            <span class="summary-text" id="resTime">—</span>
+          </div>
+          <div class="summary-item span-full" id="resJournalWrap" style="display:none;">
+            <strong>期刊名称</strong>
+            <span class="summary-text" id="resJournals">—</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2 class="section-title section-title-numbered">
+          <span class="section-num">02</span>
+          <span class="section-title-text">本次精选文献 <span id="resCount">0</span> 条</span>
+        </h2>
+        <p id="resOtherHint" style="font-size:13px;color:#6B7280;margin-bottom:1rem;display:none;"></p>
+      </div>
+      <div class="card">
+        <h2 class="section-title section-title-numbered">
+          <span class="section-num">03</span>
+          <span class="section-title-text">文献速递</span>
+        </h2>
+        <div class="review-body" id="resSummary"></div>
+      </div>
+      <div class="card">
+        <button type="button" class="papers-toggle-numbered" id="papersToggle" aria-expanded="false">
+          <span class="section-num">04</span>
+          <span class="section-title-text">精选文献一览</span>
+          <span class="chevron" id="papersChevron">▶</span>
+        </button>
+        <div class="papers-list" id="papersList"></div>
+      </div>
+      <div class="btn-row result-actions">
+        <button type="button" class="btn-secondary" id="backBtn">重新搜索</button>
+        <button type="button" class="btn-primary" id="downloadBtn">下载文献速递</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="overlay" class="overlay" aria-hidden="true">
+    <div class="modal" role="dialog" aria-labelledby="modalTitle">
+      <div class="modal-spinner"></div>
+      <h2 class="modal-title" id="modalTitle">AI 正在为你筛选前沿文献</h2>
+      <p class="modal-estimate">预计需要 3-5 分钟</p>
+      <div class="step-track" id="stepTrack">
+        <div class="step-item" data-step="1"><span class="step-dot">1</span><span class="step-label">拆解兴趣</span></div>
+        <div class="step-item" data-step="2"><span class="step-dot">2</span><span class="step-label">抓取论文</span></div>
+        <div class="step-item" data-step="3"><span class="step-dot">3</span><span class="step-label">AI筛选</span></div>
+        <div class="step-item" data-step="4"><span class="step-dot">4</span><span class="step-label">总结评分</span></div>
+        <div class="step-item" data-step="5"><span class="step-dot">5</span><span class="step-label">生成Excel</span></div>
+      </div>
+      <p class="modal-message" id="modalMessage">正在准备...</p>
+      <p class="modal-timer">已用时间 <strong id="elapsedTime">0:00</strong></p>
+    </div>
+  </div>
+
+  <script>
+    let lastResult = null;
+    let pollTimer = null;
+    let elapsedTimer = null;
+    let elapsedSeconds = 0;
+    const inputView = document.getElementById('inputView');
+    const resultView = document.getElementById('resultView');
+    const errorBox = document.getElementById('errorBox');
+    const overlay = document.getElementById('overlay');
+    const modalMessage = document.getElementById('modalMessage');
+    const elapsedTimeEl = document.getElementById('elapsedTime');
+    const stepItems = document.querySelectorAll('.step-item');
+    const interestEl = document.getElementById('interest');
+    const apiKeyEl = document.getElementById('apiKey');
+    const keywordsEl = document.getElementById('keywords');
+    const journalEl = document.getElementById('journal');
+    const timeRangeEl = document.getElementById('timeRange');
+    const startBtn = document.getElementById('startBtn');
+    const advancedToggle = document.getElementById('advancedToggle');
+    const advancedPanel = document.getElementById('advancedPanel');
+    const formControls = [interestEl, apiKeyEl, keywordsEl, journalEl, timeRangeEl, startBtn, advancedToggle];
+
+    function showError(msg) { errorBox.textContent = msg; errorBox.classList.add('visible'); }
+    function hideError() { errorBox.classList.remove('visible'); errorBox.textContent = ''; }
+    function setFormDisabled(disabled) { formControls.forEach((el) => { el.disabled = disabled; }); }
+    function switchView(view) {
+      inputView.classList.toggle('active', view === 'input');
+      resultView.classList.toggle('active', view === 'result');
+    }
+    function formatElapsed(sec) {
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+    function showOverlay() { overlay.classList.add('visible'); overlay.setAttribute('aria-hidden', 'false'); }
+    function hideOverlay() { overlay.classList.remove('visible'); overlay.setAttribute('aria-hidden', 'true'); }
+    function updateStepUI(step, allDone) {
+      const current = allDone ? 6 : Math.max(1, step || 1);
+      stepItems.forEach((el) => {
+        const n = parseInt(el.dataset.step, 10);
+        el.classList.remove('active', 'done');
+        const dot = el.querySelector('.step-dot');
+        if (allDone || n < current) { el.classList.add('done'); dot.textContent = '✓'; }
+        else if (n === current) { el.classList.add('active'); dot.textContent = String(n); }
+        else { dot.textContent = String(n); }
+      });
+    }
+    function startElapsedTimer() {
+      elapsedSeconds = 0;
+      elapsedTimeEl.textContent = '0:00';
+      elapsedTimer = setInterval(() => {
+        elapsedSeconds += 1;
+        elapsedTimeEl.textContent = formatElapsed(elapsedSeconds);
+      }, 1000);
+    }
+    function stopTimers() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+    }
+    function resetStepUI() {
+      stepItems.forEach((el) => {
+        el.classList.remove('active', 'done');
+        el.querySelector('.step-dot').textContent = el.dataset.step;
+      });
+      modalMessage.textContent = '正在准备...';
+      elapsedTimeEl.textContent = '0:00';
+    }
+    async function pollTaskStatus(taskId) {
+      const resp = await fetch(`/api/search/status?task_id=${encodeURIComponent(taskId)}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        const detail = data.detail || '状态查询失败';
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      }
+      return data;
+    }
+    async function handleStatusUpdate(status) {
+      updateStepUI(status.step, false);
+      modalMessage.textContent = status.message || '';
+      if (!status.done) return;
+      stopTimers();
+      if (status.error) {
+        hideOverlay(); setFormDisabled(false); resetStepUI(); showError(status.error); return;
+      }
+      if (status.result) {
+        lastResult = status.result;
+        updateStepUI(5, true);
+        modalMessage.textContent = '分析完成！';
+        setTimeout(() => {
+          hideOverlay(); renderResults(status.result); switchView('result');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }, 400);
+      }
+    }
+    function startPolling(taskId) {
+      const tick = async () => {
+        try {
+          const status = await pollTaskStatus(taskId);
+          await handleStatusUpdate(status);
+        } catch (err) {
+          stopTimers(); hideOverlay(); setFormDisabled(false); resetStepUI();
+          showError(err.message || '轮询失败');
+        }
+      };
+      tick();
+      pollTimer = setInterval(tick, 2000);
+    }
+    function escapeHtml(str) {
+      const d = document.createElement('div');
+      d.textContent = str ?? '';
+      return d.innerHTML;
+    }
+    advancedToggle.addEventListener('click', () => {
+      if (advancedToggle.disabled) return;
+      const open = advancedPanel.classList.toggle('open');
+      advancedToggle.classList.toggle('open', open);
+      advancedToggle.setAttribute('aria-expanded', String(open));
+    });
+    startBtn.addEventListener('click', async () => {
+      hideError();
+      const interest = interestEl.value.trim();
+      const apiKey = apiKeyEl.value.trim();
+      if (!interest) { showError('请填写个人兴趣描述。'); return; }
+      if (!apiKey) { showError('请填写 DeepSeek API Key。'); return; }
+      setFormDisabled(true); resetStepUI(); showOverlay(); startElapsedTimer();
+      const payload = { api_key: apiKey, interest, keywords: keywordsEl.value.trim(), journal_input: journalEl.value.trim(), time_range: timeRangeEl.value };
+      try {
+        const resp = await fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await resp.json();
+        if (!resp.ok) {
+          const detail = data.detail || data.error || JSON.stringify(data);
+          throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+        }
+        modalMessage.textContent = '任务已创建，开始处理...';
+        startPolling(data.task_id);
+      } catch (err) {
+        stopTimers(); hideOverlay(); setFormDisabled(false); resetStepUI();
+        showError(err.message || '请求失败，请稍后重试。');
+      }
+    });
+    function renderResults(data) {
+      document.getElementById('resInterest').textContent = data.interest || '—';
+      document.getElementById('resTerms').textContent = data.simple_terms || '—';
+      document.getElementById('resTime').textContent = data.time_range || '—';
+      const journalWrap = document.getElementById('resJournalWrap');
+      const journals = data.journals_used || [];
+      if (journals.length > 0) {
+        journalWrap.style.display = 'block';
+        document.getElementById('resJournals').textContent = journals.join('、');
+      } else { journalWrap.style.display = 'none'; }
+      const papers = data.selected_papers || [];
+      document.getElementById('resCount').textContent = String(papers.length);
+      const otherHint = document.getElementById('resOtherHint');
+      if (data.other_papers_count > 0) {
+        otherHint.style.display = 'block';
+        otherHint.textContent = `另有 ${data.other_papers_count} 篇相关论文见 Excel Sheet3`;
+      } else { otherHint.style.display = 'none'; }
+      document.getElementById('resSummary').textContent = data.summary || '';
+      const sorted = [...papers].sort((a, b) => (b.score || 0) - (a.score || 0));
+      const listEl = document.getElementById('papersList');
+      listEl.innerHTML = '';
+      listEl.classList.remove('open');
+      document.getElementById('papersToggle').setAttribute('aria-expanded', 'false');
+      document.getElementById('papersChevron').textContent = '▶';
+      sorted.forEach((p, i) => {
+        const item = document.createElement('div');
+        item.className = 'paper-item';
+        item.innerHTML = `<div class="paper-head"><span><span class="paper-seq">${String(i + 1).padStart(2, '0')}</span>${escapeHtml(p.title)}</span><span class="paper-score">推荐指数：${escapeHtml(String(p.score ?? ''))}</span></div><div class="paper-title-cn">${escapeHtml(p.title_cn)}</div><div class="paper-oneliner">${escapeHtml(p.one_liner)}</div>`;
+        listEl.appendChild(item);
+      });
+    }
+    document.getElementById('papersToggle').addEventListener('click', () => {
+      const list = document.getElementById('papersList');
+      const open = list.classList.toggle('open');
+      document.getElementById('papersToggle').setAttribute('aria-expanded', String(open));
+      document.getElementById('papersChevron').textContent = open ? '▼' : '▶';
+    });
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      if (!lastResult || !lastResult.excel_base64) {
+        showError('没有可下载的文件，请先完成分析。');
+        return;
+      }
+      try {
+        const binary = atob(lastResult.excel_base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        a.href = url;
+        a.download = `文献速递_${today}.xlsx`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) { showError('下载失败：' + e.message); }
+    });
+    document.getElementById('backBtn').addEventListener('click', () => {
+      stopTimers(); lastResult = null; hideError(); hideOverlay(); resetStepUI();
+      setFormDisabled(false); switchView('input');
+      advancedPanel.classList.remove('open');
+      advancedToggle.classList.remove('open');
+      advancedToggle.setAttribute('aria-expanded', 'false');
+    });
+  </script>
+</body>
+</html>

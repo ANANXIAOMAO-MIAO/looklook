@@ -1,0 +1,6 @@
+streamlit>=1.28
+openpyxl
+requests
+fastapi
+uvicorn[standard]
+pydantic

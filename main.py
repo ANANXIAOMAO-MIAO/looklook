@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import threading
 import time
@@ -27,6 +28,9 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
+
+FREE_MODE = True
+DEFAULT_DEEPSEEK_KEY = os.getenv("DEFAULT_DEEPSEEK_KEY", "")
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
@@ -679,7 +683,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 class SearchRequest(BaseModel):
-    api_key: str = Field(..., description="DeepSeek API Key")
+    api_key: str = Field(default="", description="DeepSeek API Key（免 Key 模式可省略）")
     interest: str = Field(..., description="个人兴趣描述")
     keywords: str = Field(default="", description="可选关键词")
     journal_input: str = Field(default="", description="可选期刊名")
@@ -772,11 +776,31 @@ def health():
     return {"status": "healthy"}
 
 
+@app.get("/api/mode")
+def api_mode():
+    """返回当前是否为免 Key 模式。"""
+    return {"free_mode": FREE_MODE}
+
+
+def _resolve_api_key(client_api_key: str) -> str:
+    """免 Key 模式使用服务端默认 Key，否则要求客户端提供。"""
+    if FREE_MODE:
+        key = DEFAULT_DEEPSEEK_KEY.strip()
+        if not key:
+            raise HTTPException(
+                status_code=500,
+                detail="服务器未配置默认 DeepSeek API Key，请联系管理员",
+            )
+        return key
+    if not client_api_key or not client_api_key.strip():
+        raise HTTPException(status_code=400, detail="请提供有效的 DeepSeek API Key")
+    return client_api_key.strip()
+
+
 @app.post("/api/search", response_model=TaskStartResponse)
 def api_search(req: SearchRequest):
     """创建异步检索任务，立即返回 task_id。"""
-    if not req.api_key or not req.api_key.strip():
-        raise HTTPException(status_code=400, detail="请提供有效的 DeepSeek API Key")
+    effective_api_key = _resolve_api_key(req.api_key)
     if not req.interest or not req.interest.strip():
         raise HTTPException(status_code=400, detail="请提供个人兴趣描述")
     if req.time_range not in TIME_RANGE_OPTIONS:
@@ -795,6 +819,7 @@ def api_search(req: SearchRequest):
             "error": None,
         }
 
+    req.api_key = effective_api_key
     thread = threading.Thread(target=_run_search_task, args=(task_id, req), daemon=True)
     thread.start()
     return TaskStartResponse(task_id=task_id)

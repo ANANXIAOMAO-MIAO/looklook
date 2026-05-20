@@ -206,6 +206,13 @@
       cursor: not-allowed;
     }
 
+    .api-key-hint {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin: -0.25rem 0 0.75rem;
+      line-height: 1.5;
+    }
+
     .advanced-toggle {
       display: flex;
       align-items: center;
@@ -574,8 +581,9 @@
         <label for="interest">个人兴趣描述 <span class="required">*</span></label>
         <textarea id="interest" placeholder="用通俗中文描述你感兴趣的研究方向，AI 将自动扩展搜索词"></textarea>
 
-        <label for="apiKey">DeepSeek API Key <span class="required">*</span></label>
+        <label for="apiKey">DeepSeek API Key <span class="required" id="apiKeyRequired">*</span></label>
         <input type="password" id="apiKey" placeholder="在此输入你的 DeepSeek API Key，不会存储" autocomplete="off" />
+        <p id="apiKeyHint" class="api-key-hint" style="display: none;">当前免 Key 使用，由站长付费</p>
 
         <button type="button" class="advanced-toggle" id="advancedToggle" aria-expanded="false">
           <span class="chevron">▶</span>
@@ -677,6 +685,7 @@
     let pollTimer = null;
     let elapsedTimer = null;
     let elapsedSeconds = 0;
+    let freeMode = false;
     const inputView = document.getElementById('inputView');
     const resultView = document.getElementById('resultView');
     const errorBox = document.getElementById('errorBox');
@@ -692,11 +701,42 @@
     const startBtn = document.getElementById('startBtn');
     const advancedToggle = document.getElementById('advancedToggle');
     const advancedPanel = document.getElementById('advancedPanel');
+    const apiKeyHint = document.getElementById('apiKeyHint');
+    const apiKeyRequired = document.getElementById('apiKeyRequired');
     const formControls = [interestEl, apiKeyEl, keywordsEl, journalEl, timeRangeEl, startBtn, advancedToggle];
 
     function showError(msg) { errorBox.textContent = msg; errorBox.classList.add('visible'); }
     function hideError() { errorBox.classList.remove('visible'); errorBox.textContent = ''; }
-    function setFormDisabled(disabled) { formControls.forEach((el) => { el.disabled = disabled; }); }
+    function setFormDisabled(disabled) {
+      formControls.forEach((el) => { el.disabled = disabled; });
+      if (freeMode) apiKeyEl.disabled = true;
+    }
+    function applyApiKeyMode(isFree) {
+      freeMode = isFree;
+      if (isFree) {
+        apiKeyEl.disabled = true;
+        apiKeyEl.value = '';
+        apiKeyEl.removeAttribute('placeholder');
+        apiKeyHint.style.display = 'block';
+        if (apiKeyRequired) apiKeyRequired.style.display = 'none';
+      } else {
+        apiKeyEl.disabled = false;
+        apiKeyEl.placeholder = '在此输入你的 DeepSeek API Key，不会存储';
+        apiKeyHint.style.display = 'none';
+        if (apiKeyRequired) apiKeyRequired.style.display = '';
+      }
+    }
+    async function initAppMode() {
+      try {
+        const resp = await fetch('/api/mode');
+        const data = await resp.json();
+        if (resp.ok) applyApiKeyMode(!!data.free_mode);
+        else applyApiKeyMode(false);
+      } catch (_) {
+        applyApiKeyMode(false);
+      }
+    }
+    initAppMode();
     function switchView(view) {
       inputView.classList.toggle('active', view === 'input');
       resultView.classList.toggle('active', view === 'result');
@@ -793,11 +833,19 @@
     startBtn.addEventListener('click', async () => {
       hideError();
       const interest = interestEl.value.trim();
-      const apiKey = apiKeyEl.value.trim();
       if (!interest) { showError('请填写个人兴趣描述。'); return; }
-      if (!apiKey) { showError('请填写 DeepSeek API Key。'); return; }
+      if (!freeMode) {
+        const apiKey = apiKeyEl.value.trim();
+        if (!apiKey) { showError('请填写 DeepSeek API Key。'); return; }
+      }
       setFormDisabled(true); resetStepUI(); showOverlay(); startElapsedTimer();
-      const payload = { api_key: apiKey, interest, keywords: keywordsEl.value.trim(), journal_input: journalEl.value.trim(), time_range: timeRangeEl.value };
+      const payload = {
+        interest,
+        keywords: keywordsEl.value.trim(),
+        journal_input: journalEl.value.trim(),
+        time_range: timeRangeEl.value,
+      };
+      if (!freeMode) payload.api_key = apiKeyEl.value.trim();
       try {
         const resp = await fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const data = await resp.json();

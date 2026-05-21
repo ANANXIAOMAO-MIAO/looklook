@@ -156,6 +156,7 @@
 
     textarea,
     input[type="text"],
+    input[type="email"],
     input[type="password"],
     select {
       width: 100%;
@@ -172,6 +173,7 @@
 
     .card-glass textarea,
     .card-glass input[type="text"],
+    .card-glass input[type="email"],
     .card-glass input[type="password"],
     .card-glass select {
       margin-bottom: 0;
@@ -558,6 +560,259 @@
       margin: 1.5rem 0;
     }
 
+    .top-bar {
+      position: fixed;
+      top: 1.25rem;
+      right: 1.5rem;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: min(420px, calc(100vw - 2rem));
+    }
+
+    .btn-ghost {
+      height: 38px;
+      padding: 0 18px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      background: transparent;
+      color: var(--text-primary);
+      border: 1.5px solid var(--color-purple);
+      transition: background 0.25s ease, color 0.25s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--gradient-main);
+      color: #FFFFFF;
+      border-color: transparent;
+      transform: translateY(-1px);
+      box-shadow: 0 8px 20px rgba(221, 180, 246, 0.35);
+    }
+
+    .btn-ghost-sm {
+      height: 36px;
+      padding: 0 14px;
+      font-size: 13px;
+    }
+
+    .auth-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(43, 47, 66, 0.45);
+      z-index: 1100;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+    }
+
+    .auth-overlay.visible {
+      display: flex;
+    }
+
+    .auth-modal {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 20px;
+      box-shadow: var(--shadow-card), 0 8px 24px rgba(141, 208, 252, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      padding: 28px 28px 24px;
+      max-width: 420px;
+      width: 100%;
+      text-align: left;
+    }
+
+    .auth-modal-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      text-align: center;
+      color: var(--text-primary);
+    }
+
+    .auth-form-panel {
+      display: none;
+      animation: authFadeIn 0.25s ease;
+    }
+
+    .auth-form-panel.active {
+      display: block;
+    }
+
+    @keyframes authFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .auth-modal .btn-primary {
+      width: 100%;
+      min-width: 0;
+      margin-top: 0.25rem;
+    }
+
+    .auth-switch {
+      margin-top: 1.25rem;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .auth-switch button {
+      background: none;
+      border: none;
+      color: #8F6AD8;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      padding: 0;
+      margin-left: 0.25rem;
+    }
+
+    .auth-switch button:hover {
+      text-decoration: underline;
+    }
+
+    .auth-error {
+      display: none;
+      background: #FEF2F2;
+      color: #B91C1C;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 1rem;
+    }
+
+    .auth-error.visible {
+      display: block;
+    }
+
+    .profile-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .profile-header h2 {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .history-section-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--text-primary);
+    }
+
+    .history-empty {
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 14px;
+      padding: 2rem 1rem;
+    }
+
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .history-item {
+      border-radius: 14px;
+      border: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.85);
+      overflow: hidden;
+    }
+
+    .history-item-toggle {
+      width: 100%;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 14px 16px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      text-align: left;
+    }
+
+    .history-item-toggle:hover {
+      background: rgba(221, 180, 246, 0.08);
+    }
+
+    .history-item-meta {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .history-item-time {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 0.35rem;
+    }
+
+    .history-item-interest {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      word-break: break-word;
+      margin-bottom: 0.35rem;
+    }
+
+    .history-item-tags {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .history-item-tags .tag-line {
+      display: block;
+    }
+
+    .history-item-chevron {
+      flex-shrink: 0;
+      color: var(--text-secondary);
+      font-size: 12px;
+      margin-top: 0.25rem;
+      transition: transform 0.2s;
+    }
+
+    .history-item.open .history-item-chevron {
+      transform: rotate(90deg);
+    }
+
+    .history-item-body {
+      display: none;
+      padding: 0 16px 16px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .history-item.open .history-item-body {
+      display: block;
+    }
+
+    .history-summary {
+      font-size: 14px;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      line-height: 1.75;
+      padding-top: 12px;
+    }
+
     @media (min-width: 600px) {
       .summary-grid { grid-template-columns: 1fr 1fr; }
       .summary-grid .span-full { grid-column: 1 / -1; }
@@ -568,6 +823,11 @@
   <div class="bg-glow" aria-hidden="true">
     <div class="glow glow-top"></div>
     <div class="glow glow-bottom"></div>
+  </div>
+
+  <div class="top-bar" id="topBar">
+    <button type="button" class="btn-ghost" id="loginBtn">登录</button>
+    <button type="button" class="btn-ghost btn-ghost-sm" id="profileBtn" style="display: none;">个人中心</button>
   </div>
 
   <div class="page-wrap">
@@ -582,8 +842,7 @@
         <textarea id="interest" placeholder="用通俗中文描述你感兴趣的研究方向，AI 将自动扩展搜索词"></textarea>
 
         <label for="apiKey">DeepSeek API Key <span class="required" id="apiKeyRequired">*</span></label>
-        <input type="password" id="apiKey" placeholder="在此输入你的 DeepSeek API Key，不会存储" autocomplete="off" />
-        <p id="apiKeyHint" class="api-key-hint" style="display: none;">当前免 Key 使用，由站长付费</p>
+        <input type="password" id="apiKey" placeholder="请输入您的 DeepSeek API Key" autocomplete="off" />
 
         <button type="button" class="advanced-toggle" id="advancedToggle" aria-expanded="false">
           <span class="chevron">▶</span>
@@ -661,6 +920,45 @@
         <button type="button" class="btn-primary" id="downloadBtn">下载文献速递</button>
       </div>
     </div>
+
+    <div id="profileView" class="view">
+      <div class="card card-glass">
+        <div class="profile-header">
+          <h2 id="profileUsername">个人中心</h2>
+          <button type="button" class="btn-secondary" id="profileBackBtn">← 返回</button>
+        </div>
+        <h3 class="history-section-title">查询记录</h3>
+        <div id="historyEmpty" class="history-empty" style="display: none;">暂无查询记录</div>
+        <div id="historyList" class="history-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="authOverlay" class="auth-overlay" aria-hidden="true">
+    <div class="auth-modal" role="dialog" aria-labelledby="authModalTitle">
+      <h2 class="auth-modal-title" id="authModalTitle">登录</h2>
+      <div id="authError" class="auth-error" role="alert"></div>
+      <div id="loginPanel" class="auth-form-panel active">
+        <label for="loginEmail">邮箱</label>
+        <input type="email" id="loginEmail" autocomplete="email" />
+        <label for="loginPassword">密码</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" />
+        <button type="button" class="btn-primary" id="loginSubmitBtn">登录</button>
+        <p class="auth-switch">没有账号？<button type="button" id="showRegisterBtn">去注册</button></p>
+      </div>
+      <div id="registerPanel" class="auth-form-panel">
+        <label for="regEmail">邮箱</label>
+        <input type="email" id="regEmail" autocomplete="email" />
+        <label for="regUsername">用户名</label>
+        <input type="text" id="regUsername" autocomplete="username" />
+        <label for="regPassword">密码</label>
+        <input type="password" id="regPassword" autocomplete="new-password" />
+        <label for="regPasswordConfirm">确认密码</label>
+        <input type="password" id="regPasswordConfirm" autocomplete="new-password" />
+        <button type="button" class="btn-primary" id="registerSubmitBtn">注册</button>
+        <p class="auth-switch">已有账号？<button type="button" id="showLoginBtn">去登录</button></p>
+      </div>
+    </div>
   </div>
 
   <div id="overlay" class="overlay" aria-hidden="true">
@@ -681,13 +979,29 @@
   </div>
 
   <script>
+    const STORAGE_TOKEN = 'looklook_token';
+    const STORAGE_USERNAME = 'looklook_username';
+    const STORAGE_USER_ID = 'looklook_user_id';
+
     let lastResult = null;
     let pollTimer = null;
     let elapsedTimer = null;
     let elapsedSeconds = 0;
     let freeMode = false;
+    let authToken = localStorage.getItem(STORAGE_TOKEN) || '';
+    let authUsername = localStorage.getItem(STORAGE_USERNAME) || '';
+    let authUserId = localStorage.getItem(STORAGE_USER_ID) || '';
+
     const inputView = document.getElementById('inputView');
     const resultView = document.getElementById('resultView');
+    const profileView = document.getElementById('profileView');
+    const loginBtn = document.getElementById('loginBtn');
+    const profileBtn = document.getElementById('profileBtn');
+    const authOverlay = document.getElementById('authOverlay');
+    const authError = document.getElementById('authError');
+    const loginPanel = document.getElementById('loginPanel');
+    const registerPanel = document.getElementById('registerPanel');
+    const authModalTitle = document.getElementById('authModalTitle');
     const errorBox = document.getElementById('errorBox');
     const overlay = document.getElementById('overlay');
     const modalMessage = document.getElementById('modalMessage');
@@ -701,7 +1015,6 @@
     const startBtn = document.getElementById('startBtn');
     const advancedToggle = document.getElementById('advancedToggle');
     const advancedPanel = document.getElementById('advancedPanel');
-    const apiKeyHint = document.getElementById('apiKeyHint');
     const apiKeyRequired = document.getElementById('apiKeyRequired');
     const formControls = [interestEl, apiKeyEl, keywordsEl, journalEl, timeRangeEl, startBtn, advancedToggle];
 
@@ -716,13 +1029,11 @@
       if (isFree) {
         apiKeyEl.disabled = true;
         apiKeyEl.value = '';
-        apiKeyEl.removeAttribute('placeholder');
-        apiKeyHint.style.display = 'block';
+        apiKeyEl.placeholder = '放心 Look，大胆搜——key的事，站长替你买单！';
         if (apiKeyRequired) apiKeyRequired.style.display = 'none';
       } else {
         apiKeyEl.disabled = false;
-        apiKeyEl.placeholder = '在此输入你的 DeepSeek API Key，不会存储';
-        apiKeyHint.style.display = 'none';
+        apiKeyEl.placeholder = '请输入您的 DeepSeek API Key';
         if (apiKeyRequired) apiKeyRequired.style.display = '';
       }
     }
@@ -736,10 +1047,225 @@
         applyApiKeyMode(false);
       }
     }
+    function getAuthHeaders(extraHeaders) {
+      const headers = Object.assign({}, extraHeaders || {});
+      if (authToken) headers.Authorization = 'Bearer ' + authToken;
+      return headers;
+    }
+    function persistAuth(token, userId, username) {
+      authToken = token;
+      authUserId = String(userId);
+      authUsername = username;
+      localStorage.setItem(STORAGE_TOKEN, token);
+      localStorage.setItem(STORAGE_USER_ID, authUserId);
+      localStorage.setItem(STORAGE_USERNAME, username);
+      updateAuthUI();
+    }
+    function clearAuth() {
+      authToken = '';
+      authUserId = '';
+      authUsername = '';
+      localStorage.removeItem(STORAGE_TOKEN);
+      localStorage.removeItem(STORAGE_USER_ID);
+      localStorage.removeItem(STORAGE_USERNAME);
+      updateAuthUI();
+    }
+    function updateAuthUI() {
+      const loggedIn = !!authToken;
+      loginBtn.style.display = loggedIn ? 'none' : '';
+      profileBtn.style.display = loggedIn ? '' : 'none';
+    }
+    async function validateStoredAuth() {
+      if (!authToken) { updateAuthUI(); return; }
+      try {
+        const resp = await fetch('/api/me', { headers: getAuthHeaders() });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error('invalid');
+        persistAuth(authToken, data.user_id, data.username);
+      } catch (_) {
+        clearAuth();
+      }
+    }
+    function showAuthError(msg) {
+      authError.textContent = msg;
+      authError.classList.add('visible');
+    }
+    function hideAuthError() {
+      authError.classList.remove('visible');
+      authError.textContent = '';
+    }
+    function switchAuthPanel(panel) {
+      const isLogin = panel === 'login';
+      loginPanel.classList.toggle('active', isLogin);
+      registerPanel.classList.toggle('active', !isLogin);
+      authModalTitle.textContent = isLogin ? '登录' : '注册';
+      hideAuthError();
+    }
+    function openAuthModal(panel) {
+      switchAuthPanel(panel || 'login');
+      authOverlay.classList.add('visible');
+      authOverlay.setAttribute('aria-hidden', 'false');
+    }
+    function closeAuthModal() {
+      authOverlay.classList.remove('visible');
+      authOverlay.setAttribute('aria-hidden', 'true');
+      hideAuthError();
+    }
+    function parseApiDetail(data) {
+      const detail = data.detail;
+      if (typeof detail === 'string') return detail;
+      if (Array.isArray(detail) && detail.length) return detail.map((d) => d.msg || JSON.stringify(d)).join('；');
+      return data.message || JSON.stringify(data);
+    }
+    async function submitLogin() {
+      hideAuthError();
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      if (!email || !password) { showAuthError('请填写邮箱和密码'); return; }
+      try {
+        const resp = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(parseApiDetail(data) || '登录失败');
+        persistAuth(data.token, data.user_id, data.username);
+        closeAuthModal();
+        document.getElementById('loginPassword').value = '';
+      } catch (err) {
+        showAuthError(err.message === '邮箱或密码错误' ? '密码错误' : (err.message || '登录失败'));
+      }
+    }
+    async function submitRegister() {
+      hideAuthError();
+      const email = document.getElementById('regEmail').value.trim();
+      const username = document.getElementById('regUsername').value.trim();
+      const password = document.getElementById('regPassword').value;
+      const confirm = document.getElementById('regPasswordConfirm').value;
+      if (!email || !username || !password) { showAuthError('请填写完整注册信息'); return; }
+      if (password !== confirm) { showAuthError('两次输入的密码不一致'); return; }
+      try {
+        const resp = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, username, password }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(parseApiDetail(data) || '注册失败');
+        const loginResp = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        const loginData = await loginResp.json();
+        if (!loginResp.ok) {
+          switchAuthPanel('login');
+          showAuthError('注册成功，请登录');
+          return;
+        }
+        persistAuth(loginData.token, loginData.user_id, loginData.username);
+        closeAuthModal();
+        document.getElementById('regPassword').value = '';
+        document.getElementById('regPasswordConfirm').value = '';
+      } catch (err) {
+        showAuthError(err.message || '注册失败');
+      }
+    }
+    function formatHistoryTime(raw) {
+      if (!raw) return '—';
+      const d = new Date(raw.replace(' ', 'T'));
+      if (Number.isNaN(d.getTime())) return raw;
+      return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+    function parseJournals(raw) {
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.filter(Boolean) : [];
+      } catch (_) {
+        return raw.split(',').map((s) => s.trim()).filter(Boolean);
+      }
+    }
+    function truncateText(str, maxLen) {
+      const s = (str || '').trim();
+      if (!s) return '—';
+      if (s.length <= maxLen) return s;
+      return s.slice(0, maxLen) + '…';
+    }
+    function buildHistoryTagLines(item) {
+      const lines = [];
+      if (item.simple_terms) {
+        lines.push('<span class="tag-line">扩展关键词：' + escapeHtml(item.simple_terms) + '</span>');
+      }
+      if (item.time_range) {
+        lines.push('<span class="tag-line">时间范围：' + escapeHtml(item.time_range) + '</span>');
+      }
+      const journals = parseJournals(item.journals);
+      if (journals.length) {
+        lines.push('<span class="tag-line">期刊：' + escapeHtml(journals.join('、')) + '</span>');
+      }
+      return lines.join('');
+    }
+    async function loadSearchHistory() {
+      const listEl = document.getElementById('historyList');
+      const emptyEl = document.getElementById('historyEmpty');
+      listEl.innerHTML = '';
+      emptyEl.style.display = 'none';
+      document.getElementById('profileUsername').textContent = authUsername
+        ? `Hi! ${authUsername}`
+        : '个人中心';
+      if (!authToken) {
+        emptyEl.style.display = 'block';
+        emptyEl.textContent = '请先登录后查看记录';
+        return;
+      }
+      try {
+        const resp = await fetch('/api/user/history', { headers: getAuthHeaders() });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(parseApiDetail(data) || '加载失败');
+        const items = Array.isArray(data) ? data : [];
+        if (!items.length) {
+          emptyEl.style.display = 'block';
+          emptyEl.textContent = '暂无查询记录';
+          return;
+        }
+        items.forEach((item) => {
+          const interestShort = truncateText(item.interest_desc, 50);
+          const fullInterest = (item.interest_desc || '').trim();
+          const wrap = document.createElement('div');
+          wrap.className = 'history-item';
+          wrap.innerHTML = `
+            <button type="button" class="history-item-toggle" aria-expanded="false">
+              <span class="history-item-meta">
+                <span class="history-item-time">${escapeHtml(formatHistoryTime(item.created_at))}</span>
+                <span class="history-item-interest" title="${escapeHtml(fullInterest)}">${escapeHtml(interestShort)}</span>
+                <span class="history-item-tags">${buildHistoryTagLines(item)}</span>
+              </span>
+              <span class="history-item-chevron">▶</span>
+            </button>
+            <div class="history-item-body">
+              <div class="history-summary review-body"></div>
+            </div>`;
+          wrap.querySelector('.history-summary').textContent = item.summary || '（暂无文献速递内容）';
+          const toggle = wrap.querySelector('.history-item-toggle');
+          toggle.addEventListener('click', () => {
+            const open = wrap.classList.toggle('open');
+            toggle.setAttribute('aria-expanded', String(open));
+          });
+          listEl.appendChild(wrap);
+        });
+      } catch (err) {
+        emptyEl.style.display = 'block';
+        emptyEl.textContent = err.message || '加载查询记录失败';
+      }
+    }
+    validateStoredAuth();
     initAppMode();
     function switchView(view) {
       inputView.classList.toggle('active', view === 'input');
       resultView.classList.toggle('active', view === 'result');
+      profileView.classList.toggle('active', view === 'profile');
     }
     function formatElapsed(sec) {
       const m = Math.floor(sec / 60);
@@ -847,7 +1373,11 @@
       };
       if (!freeMode) payload.api_key = apiKeyEl.value.trim();
       try {
-        const resp = await fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const resp = await fetch('/api/search', {
+          method: 'POST',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(payload),
+        });
         const data = await resp.json();
         if (!resp.ok) {
           const detail = data.detail || data.error || JSON.stringify(data);
@@ -878,7 +1408,9 @@
         otherHint.textContent = `另有 ${data.other_papers_count} 篇相关论文见 Excel Sheet3`;
       } else { otherHint.style.display = 'none'; }
       document.getElementById('resSummary').textContent = data.summary || '';
-      const sorted = [...papers].sort((a, b) => (b.score || 0) - (a.score || 0));
+      const sorted = [...papers].sort(
+        (a, b) => (b.recommendation_index ?? b.score ?? 0) - (a.recommendation_index ?? a.score ?? 0)
+      );
       const listEl = document.getElementById('papersList');
       listEl.innerHTML = '';
       listEl.classList.remove('open');
@@ -887,7 +1419,9 @@
       sorted.forEach((p, i) => {
         const item = document.createElement('div');
         item.className = 'paper-item';
-        item.innerHTML = `<div class="paper-head"><span><span class="paper-seq">${String(i + 1).padStart(2, '0')}</span>${escapeHtml(p.title)}</span><span class="paper-score">推荐指数：${escapeHtml(String(p.score ?? ''))}</span></div><div class="paper-title-cn">${escapeHtml(p.title_cn)}</div><div class="paper-oneliner">${escapeHtml(p.one_liner)}</div>`;
+        const recIndex = p.recommendation_index ?? p.score ?? '';
+        const recText = p.recommendation_text || '';
+        item.innerHTML = `<div class="paper-head"><span><span class="paper-seq">${String(i + 1).padStart(2, '0')}</span>${escapeHtml(p.title)}</span><span class="paper-score">推荐指数：${escapeHtml(String(recIndex))}</span></div><div class="paper-title-cn">${escapeHtml(p.title_cn)}</div><div class="paper-oneliner">${escapeHtml(p.one_liner)}</div>${recText ? `<div class="paper-oneliner" style="margin-top:0.35rem;color:#6B7280;">推荐理由：${escapeHtml(recText)}</div>` : ''}`;
         listEl.appendChild(item);
       });
     }
@@ -922,6 +1456,32 @@
       advancedPanel.classList.remove('open');
       advancedToggle.classList.remove('open');
       advancedToggle.setAttribute('aria-expanded', 'false');
+    });
+    loginBtn.addEventListener('click', () => openAuthModal('login'));
+    profileBtn.addEventListener('click', () => {
+      hideError();
+      switchView('profile');
+      loadSearchHistory();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    document.getElementById('profileBackBtn').addEventListener('click', () => {
+      switchView('input');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    document.getElementById('showRegisterBtn').addEventListener('click', () => switchAuthPanel('register'));
+    document.getElementById('showLoginBtn').addEventListener('click', () => switchAuthPanel('login'));
+    document.getElementById('loginSubmitBtn').addEventListener('click', submitLogin);
+    document.getElementById('registerSubmitBtn').addEventListener('click', submitRegister);
+    authOverlay.addEventListener('click', (e) => {
+      if (e.target === authOverlay) closeAuthModal();
+    });
+    [document.getElementById('loginPassword'), document.getElementById('regPasswordConfirm')].forEach((el) => {
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          if (loginPanel.classList.contains('active')) submitLogin();
+          else submitRegister();
+        }
+      });
     });
   </script>
 </body>

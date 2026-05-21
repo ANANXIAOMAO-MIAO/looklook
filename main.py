@@ -5,20 +5,24 @@ LOOKLOOK — FastAPI 后端：文献检索与智能速递流水线
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
+import secrets
+import sqlite3
 import threading
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
 
+import jwt
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
@@ -55,6 +59,189 @@ TIME_RANGE_DAYS = {
 # 异步任务进度存储 {task_id: {step, message, done, result, error}}
 task_status: dict[str, dict[str, Any]] = {}
 task_lock = threading.Lock()
+
+# 用户认证
+DB_PATH = Path(__file__).parent / "looklook.db"
+JWT_SECRET_KEY = "looklook-jwt-secret-change-in-production"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_DAYS = 7
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+SCRYPT_N = 2**14
+SCRYPT_R = 8
+SCRYPT_P = 1
+SCRYPT_DKLEN = 64
+SCRYPT_SALT_LEN = 16
+
+# ---------------------------------------------------------------------------
+# 数据库与用户认证
+# ---------------------------------------------------------------------------
+
+
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    with get_db_connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                username TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                interest_desc TEXT,
+                keywords TEXT,
+                simple_terms TEXT,
+                time_range TEXT,
+                journals TEXT,
+                summary TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            """
+        )
+        conn.commit()
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(SCRYPT_SALT_LEN)
+    pwd_hash = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=SCRYPT_N,
+        r=SCRYPT_R,
+        p=SCRYPT_P,
+        dklen=SCRYPT_DKLEN,
+    )
+    return f"{salt.hex()}:{pwd_hash.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt_hex, hash_hex = stored.split(":", 1)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+    except (ValueError, TypeError):
+        return False
+    pwd_hash = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=SCRYPT_N,
+        r=SCRYPT_R,
+        p=SCRYPT_P,
+        dklen=SCRYPT_DKLEN,
+    )
+    return secrets.compare_digest(pwd_hash, expected)
+
+
+def create_access_token(user_id: int, email: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "exp": now + timedelta(days=JWT_EXPIRE_DAYS),
+        "iat": now,
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _is_valid_email(email: str) -> bool:
+    return bool(EMAIL_PATTERN.match(email))
+
+
+def _get_user_by_email(email: str) -> sqlite3.Row | None:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT id, email, username, password_hash FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+    return row
+
+
+def _get_user_by_id(user_id: int) -> sqlite3.Row | None:
+    with get_db_connection() as conn:
+        return conn.execute(
+            "SELECT id, email, username FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    parts = authorization.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1].strip() or None
+
+
+def _decode_user_from_token(token: str) -> dict[str, Any] | None:
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    user_id = payload.get("user_id")
+    if user_id is None:
+        return None
+    return {"user_id": int(user_id), "email": str(payload.get("email", ""))}
+
+
+def _optional_user_id_from_header(authorization: str | None) -> int | None:
+    token = _extract_bearer_token(authorization)
+    if not token:
+        return None
+    decoded = _decode_user_from_token(token)
+    return decoded["user_id"] if decoded else None
+
+
+def _require_user_id_from_header(authorization: str | None) -> int:
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="未登录或令牌无效")
+    decoded = _decode_user_from_token(token)
+    if not decoded:
+        raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+    user = _get_user_by_id(decoded["user_id"])
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    return int(user["id"])
+
+
+def save_search_history(user_id: int, req: SearchRequest, result: dict[str, Any]) -> None:
+    journals = result.get("journals_used") or []
+    journals_text = json.dumps(journals, ensure_ascii=False) if journals else ""
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO search_history (
+                user_id, interest_desc, keywords, simple_terms,
+                time_range, journals, summary
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                result.get("interest") or req.interest.strip(),
+                req.keywords.strip() if req.keywords else "",
+                result.get("simple_terms") or "",
+                result.get("time_range") or req.time_range,
+                journals_text,
+                result.get("summary") or "",
+            ),
+        )
+        conn.commit()
+
 
 # ---------------------------------------------------------------------------
 # 流水线核心函数（自 app.py 提取，无 Streamlit 依赖）
@@ -115,76 +302,198 @@ def call_deepseek(
     raise RuntimeError(f"DeepSeek API 调用失败（已重试 {MAX_RETRIES} 次）: {last_error}")
 
 
-def parse_json_response(text: str) -> Any:
-    """解析 DeepSeek 返回的 JSON，支持外层包裹对象。"""
-    text = text.strip()
+def parse_json_response(content: str) -> Any:
+    """
+    安全解析 AI 返回的 JSON。
+    只负责：清理 markdown 标记 → json.loads → 返回原始解析结果。
+    不做任何类型判断或字段提取，把 dict/list/str 原样交给调用方处理。
+    """
+    if not content:
+        return {}
+
+    text = content.strip()
+
+    # 去掉 AI 可能包裹的 ```json ... ``` 标记
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    parsed = json.loads(text)
-    if isinstance(parsed, dict):
-        for key in ("results", "papers", "items", "data", "relevant_papers", "batch"):
-            if key in parsed and isinstance(parsed[key], list):
-                return parsed[key]
-        for v in parsed.values():
-            if isinstance(v, list):
-                return v
-    return parsed
+        lines = text.split("\n")
+        if lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print(f"[JSON解析失败] 原始返回前200字符: {content[:200]}")
+        return {}
+
+
+def safe_get_json_field(
+    data: Any,
+    field: str,
+    default: Any = None,
+    expected_type: type | None = None,
+) -> Any:
+    """
+    安全地从解析后的 JSON 数据中提取字段。
+    data: parse_json_response 的返回值
+    field: 字段名
+    default: 默认值
+    expected_type: 期望的类型（如 list, str），如果实际类型不匹配则返回 default
+    """
+    if not isinstance(data, dict):
+        return default
+    value = data.get(field, default)
+    if expected_type is not None and not isinstance(value, expected_type):
+        return default
+    return value
+
+
+def _extract_results_list(parsed: Any) -> list:
+    """从 P2/P3 等阶段的 JSON 中提取 results 列表。"""
+    results = safe_get_json_field(parsed, "results", default=None, expected_type=list)
+    if isinstance(results, list):
+        return results
+    if isinstance(parsed, list):
+        return parsed
+    return []
+
+
+def _simple_terms_to_openalex_query(simple_terms_raw: Any, fallback: str) -> tuple[str, str]:
+    """将 P1 返回的 simple_terms（数组或字符串）转为 OpenAlex 查询串与展示文本。"""
+    terms: list[str] = []
+    if isinstance(simple_terms_raw, list):
+        terms = [str(t).strip() for t in simple_terms_raw if str(t).strip()]
+    elif isinstance(simple_terms_raw, str) and simple_terms_raw.strip():
+        raw = simple_terms_raw.strip()
+        if " OR " in raw.upper():
+            parts = re.split(r"\s+OR\s+", raw, flags=re.IGNORECASE)
+            terms = [p.strip() for p in parts if p.strip()]
+        else:
+            terms = [t for t in raw.split() if t.strip()]
+
+    if not terms:
+        fb = fallback.strip()
+        return fb, fb
+
+    query = " OR ".join(terms)
+    display = ", ".join(terms)
+    return query, display
 
 
 def expand_keywords(
     api_key: str, keywords: str, interest: str, journal_input: str
-) -> tuple[list[str], str]:
-    """关键词拓展、期刊翻译与 OpenAlex 广撒网搜索词生成。"""
+) -> dict[str, Any]:
+    """P1：用户意图解析、检索策略与筛选标尺生成。"""
     keywords = keywords.strip()
     journal_hint = journal_input.strip() if journal_input.strip() else "（用户未填写期刊）"
-    keywords_note = (
-        "（用户未填写关键词，请完全依据个人兴趣描述生成 simple_terms）"
-        if not keywords
-        else keywords
-    )
+    if keywords:
+        keywords_note = f"用户自行提供的关键词：{keywords}"
+    else:
+        keywords_note = "用户未填写关键词。"
 
     system_msg = (
-        "你是学术文献检索专家，专门为 OpenAlex 设计「广撒网」式检索词。"
-        "目标是尽可能多地召回可能相关的论文，因此搜索词要宽泛，包含同义词和近义词，"
-        "不要使用双引号做短语精确匹配。"
-        "必须返回合法 JSON，且只包含 simple_terms 和 journal_names 两个字段。"
-        "无论用户是否提供关键词，都必须返回 simple_terms 字段。"
+        "你是用户意图解析与学术检索策略专家。"
+        "你的任务是根据用户的自然语言兴趣描述，完成三件事：\n"
+        "1. 理解用户的产出意图（如内容创作、报告支撑、领域探索）；\n"
+        "2. 提取核心概念，生成用于 OpenAlex 的英文搜索词（必须广泛且包含同义词近义词，不使用短语精确匹配）；\n"
+        "3. 制定论文筛选的评分指南，告诉后续筛选阶段「什么样的论文在该意图下算高分」。\n\n"
+        "你必须返回一个合法 JSON 对象，且只包含 JSON，无其他文字。JSON 包含以下字段：\n"
+        "  - intent_type: 字符串，取值为 \"content_creation\"（内容创作，如科普、小红书帖子）、"
+        "\"report_support\"（报告/课题支撑，需引用文献论证观点）、\"exploration\"（领域探索，无明确产出要求）。\n"
+        "  - core_concepts: 字符串，用中文简述用户的核心关注点，包括隐含的限定条件（物种、人群、方法偏好等），"
+        "供后续筛选和综述生成使用。\n"
+        "  - simple_terms: 数组，英文检索词。每个词应是一个单词或简短的 2-3 词短语（但不要加引号做精确匹配）。"
+        "必须广泛撒网，包含同义词、近义词、上下位词。如果用户提到了具体的物种、人群、地域，"
+        "必须将这些作为检索词加入（如 feline, cat, adolescent, Chinese）。\n"
+        "  - journal_names: 数组，若用户指定期刊或你需要限定高影响期刊则列出 ISSN 或简称，否则为空数组。\n"
+        "  - exclusion_terms: 数组，需要排除的英文术语。用于过滤明显无关方向的论文。"
+        "必须基于用户意图和隐含限定生成，例如用户研究猫，则排除 human, rat, mouse 等；"
+        "用户研究青少年，则排除 children, infant 等。每个词要确保是全文检索会匹配到的无关词汇。\n"
+        "  - scoring_guide: 字符串，用中文说明在该用户意图下，什么样的论文应被 P2 评为高分。"
+        "包含具体标准，如「是否有清晰的结论」「是否容易用通俗语言转述」「是否是综述或元分析」「引用量高低」等。"
+        "这个指南将被用于筛选论文，所以必须可操作。\n\n"
+        "重要原则：\n"
+        "- 必须识别并保留用户的隐含限定词（尤其物种、人群、地域），绝不能丢失。\n"
+        "- 如果用户描述看起来与医学/人类相关，但提到了动物，必须将动物词加入检索词并排除人类相关术语。\n"
+        "- 搜索词数量建议 5-15 个，覆盖不同角度。\n"
+        "- 排除词只添加那些肯定无关且会大量误召回的词，不要过度排除。\n"
+        "- 思维链：先在内部简要分析用户意图、核心概念、限定条件，再生成 JSON。但最终只输出 JSON。"
     )
-    user_msg = f"""请根据以下信息返回 JSON 对象（仅 JSON，无其他文字）：
+    user_msg = f"""用户兴趣描述：
+{interest}
 
-字段要求：
-1. "simple_terms": 用于 OpenAlex search 参数的英文检索串。策略：广撒网、高召回。
-   - 使用 3–5 个最核心的英文关键词，以空格分隔
-   - 不要使用双引号包裹短语
-   - 同义词、近义词用大写 OR 连接，例如：bias OR prejudice interpersonal OR social relationships
-   - 若兴趣涉及多个维度，可用 OR 连接不同维度
-   - 词组不要加引号；OR 必须大写
-   - **若用户关键词为空**，则完全依据「个人兴趣描述」自动生成 simple_terms，
-     范围要广泛，涵盖同义词、近义词，使用 OR 连接不同概念，确保 OpenAlex 能尽可能多地召回相关论文
-2. "journal_names": 字符串数组。若用户填写了期刊（中英文均可），翻译为标准英文期刊全称；
-   若未填写则返回空数组 []
-
-用户关键词：{keywords_note}
-个人兴趣描述：{interest}
+{keywords_note}
 用户期刊输入：{journal_hint}
 
-返回格式示例：
-{{"simple_terms": "bias OR prejudice interpersonal relationships", "journal_names": ["Nature"]}}"""
+请返回 JSON 对象（仅 JSON，无其他文字）：
+{{
+  "intent_type": "...",
+  "core_concepts": "...",
+  "simple_terms": [...],
+  "journal_names": [...],
+  "exclusion_terms": [...],
+  "scoring_guide": "..."
+}}
+
+重要：如果用户提供了关键词，你必须将这些关键词翻译/转化为适当的英文检索词，并确保它们出现在 simple_terms 数组中。"""
 
     content = call_deepseek(
         api_key,
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         json_mode=True,
     )
-    data = json.loads(content)
-    journal_names = data.get("journal_names", [])
-    simple_terms = data.get("simple_terms", "")
-    if not isinstance(journal_names, list):
-        journal_names = []
-    if not simple_terms or not str(simple_terms).strip():
-        simple_terms = keywords if keywords else interest[:80]
-    return [str(j) for j in journal_names], str(simple_terms).strip()
+    data = parse_json_response(content)
+    if not isinstance(data, dict):
+        data = {}
+
+    journal_names = safe_get_json_field(data, "journal_names", default=[], expected_type=list)
+
+    exclusion_terms = safe_get_json_field(data, "exclusion_terms", default=[], expected_type=list)
+    exclusion_terms = [
+        str(t).strip().lower() for t in exclusion_terms if str(t).strip()
+    ]
+
+    simple_terms_raw = data.get("simple_terms", "")
+    if not isinstance(simple_terms_raw, (list, str)):
+        simple_terms_raw = ""
+
+    fallback = keywords if keywords else interest[:80]
+    simple_terms_query, simple_terms_display = _simple_terms_to_openalex_query(
+        simple_terms_raw, fallback
+    )
+
+    core_concepts = str(safe_get_json_field(data, "core_concepts", default="") or "").strip()
+    scoring_guide = str(safe_get_json_field(data, "scoring_guide", default="") or "").strip()
+    intent_type = str(
+        safe_get_json_field(data, "intent_type", default="exploration") or "exploration"
+    ).strip()
+
+    return {
+        "journal_names": [str(j) for j in journal_names],
+        "simple_terms": simple_terms_query,
+        "simple_terms_display": simple_terms_display,
+        "core_concepts": core_concepts,
+        "exclusion_terms": exclusion_terms,
+        "scoring_guide": scoring_guide,
+        "intent_type": intent_type,
+    }
+
+
+def filter_papers_by_exclusion(
+    papers: list[dict], exclusion_terms: list[str]
+) -> list[dict]:
+    """根据 P1 排除词过滤 OpenAlex 论文（标题+摘要命中任一词则丢弃）。"""
+    if not exclusion_terms:
+        return papers
+    kept: list[dict] = []
+    for paper in papers:
+        text = f"{paper.get('title', '')} {paper.get('abstract', '')}".lower()
+        if any(term in text for term in exclusion_terms):
+            continue
+        kept.append(paper)
+    return kept
 
 
 def fetch_papers_openalex(
@@ -339,7 +648,13 @@ def fetch_papers_openalex(
 
 
 def filter_papers_batch(
-    api_key: str, batch: list[dict], interest: str, batch_num: int
+    api_key: str,
+    batch: list[dict],
+    interest: str,
+    batch_num: int,
+    *,
+    core_concepts: str = "",
+    scoring_guide: str = "",
 ) -> list[dict]:
     """AI 智能筛选一批论文。"""
     lines = []
@@ -348,12 +663,18 @@ def filter_papers_batch(
         lines.append(f"[{i}] 标题: {p['title']}\n摘要: {abstract[:800]}")
     papers_text = "\n\n".join(lines)
 
+    context_block = ""
+    if core_concepts or scoring_guide:
+        context_block = (
+            f"\n\n用户核心关注点：{core_concepts}\n\n评分指南：{scoring_guide}"
+        )
+
     system_msg = (
         "你是学术论文筛选助手。根据用户兴趣判断每篇论文是否高度相关。"
         "必须返回 JSON 对象，包含 results 数组。"
     )
     user_msg = f"""用户个人兴趣描述：
-{interest}
+{interest}{context_block}
 
 以下论文（批次内序号从 0 开始）：
 {papers_text}
@@ -368,12 +689,8 @@ def filter_papers_batch(
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         json_mode=True,
     )
-    parsed = json.loads(content)
-    results = parsed.get("results", parsed) if isinstance(parsed, dict) else parsed
-    if not isinstance(results, list):
-        results = parse_json_response(content)
-        if isinstance(results, dict):
-            results = list(results.values())[0] if results else []
+    parsed = parse_json_response(content)
+    results = _extract_results_list(parsed)
 
     relevant_indices = set()
     for item in results:
@@ -383,78 +700,139 @@ def filter_papers_batch(
     return [batch[i] for i in range(len(batch)) if i in relevant_indices]
 
 
-def enrich_papers_batch(api_key: str, batch: list[dict], interest: str) -> list[dict]:
-    """为一批论文生成中文信息与评分。"""
-    lines = []
+def enrich_papers_batch(
+    api_key: str,
+    batch: list[dict],
+    interest: str,
+    *,
+    core_concepts: str = "",
+    intent_type: str = "exploration",
+) -> list[dict]:
+    """P3：为一批论文生成中文信息、0-1 相关度得分与自然段推荐理由。"""
+    papers_for_ai = []
     for i, p in enumerate(batch):
-        abstract = p.get("abstract") or "（无摘要）"
-        lines.append(f"[{i}] 标题: {p['title']}\n摘要: {abstract[:600]}")
+        papers_for_ai.append(
+            {
+                "id": i,
+                "title": p.get("title", ""),
+                "abstract": (p.get("abstract") or "（无摘要）")[:600],
+            }
+        )
+    papers_json = json.dumps(papers_for_ai, ensure_ascii=False, indent=2)
 
-    system_msg = "你是学术论文分析助手。为每篇论文生成中文翻译、总结和评分。必须返回 JSON。"
+    system_msg = (
+        "你是学术论文分析助手，角色为「私人研究助理」。"
+        "你的任务是为每篇论文生成中文翻译、一句话总结，"
+        "根据用户需求给出 0-1 之间的相关度得分，"
+        "并写出一段通顺的中文推荐理由（recommendation_text）。"
+        "推荐理由应把使用场景、证据类型、最值得引用的数据或结论融入一段自然语言，"
+        "不要分点罗列，不要包含「推荐理由」四字，长度约 40-80 字。必须返回 JSON。"
+    )
     user_msg = f"""用户兴趣：{interest}
+用户核心关注点：{core_concepts}
+用户产出意图：{intent_type}（content_creation=内容创作，report_support=报告支撑，exploration=领域探索）
+
+请对以下论文逐一处理，返回 JSON：
+{{
+  "results": [
+    {{
+      "id": 0,
+      "title_cn": "中文标题",
+      "summary_cn": "一句话中文总结（包含研究对象、方法、主要发现）",
+      "relevance_score": 0.85,
+      "recommendation_text": "这篇论文通过随机对照试验验证了饮食调整对超重猫的减重效果，可作为科普文章中科学减肥方法的数据支撑，其中报告的平均减重幅度达12%值得引用。"
+    }}
+  ]
+}}
 
 论文列表：
-{chr(10).join(lines)}
-
-返回 JSON：
-{{"results": [
-  {{
-    "index": 0,
-    "relevance_score": 0.85,
-    "title_cn": "中文标题",
-    "one_liner": "一句话总结（中文）",
-    "recommendation_reason": "推荐理由（中文，约30字）"
-  }}
-]}}
-
-relevance_score 为 0-1 浮点数。仅返回 JSON。"""
+{papers_json}
+"""
 
     content = call_deepseek(
         api_key,
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         json_mode=True,
     )
-    parsed = json.loads(content)
-    results = parsed.get("results", [])
-    if not isinstance(results, list):
-        results = parse_json_response(content)
-        if not isinstance(results, list):
-            results = []
+    parsed = parse_json_response(content)
+    results = _extract_results_list(parsed)
 
     enrich_map: dict[int, dict] = {}
     for item in results:
-        if isinstance(item, dict) and "index" in item:
-            enrich_map[item["index"]] = item
+        if not isinstance(item, dict):
+            continue
+        paper_id = item.get("id", item.get("index"))
+        if paper_id is None:
+            continue
+        try:
+            enrich_map[int(paper_id)] = item
+        except (TypeError, ValueError):
+            continue
 
     enriched = []
     for i, p in enumerate(batch):
         info = enrich_map.get(i, {})
         paper = dict(p)
-        paper["relevance_score"] = float(info.get("relevance_score", 0.5))
-        paper["title_cn"] = info.get("title_cn") or p["title"]
-        paper["one_liner"] = info.get("one_liner", "")
-        paper["recommendation_reason"] = info.get("recommendation_reason", "")
+
+        try:
+            relevance = float(info.get("relevance_score", 0.5))
+        except (TypeError, ValueError):
+            relevance = 0.5
+        paper["relevance_score"] = max(0.0, min(1.0, relevance))
+
+        paper["title_cn"] = info.get("title_cn") or p.get("title", "")
+        summary_cn = info.get("summary_cn") or info.get("one_liner", "")
+        paper["summary_cn"] = summary_cn
+        paper["one_liner"] = summary_cn
+
+        recommendation_text = str(info.get("recommendation_text", "") or "").strip()
+        if not recommendation_text:
+            rec_raw = info.get("recommendation")
+            if isinstance(rec_raw, dict):
+                if rec_raw.get("short"):
+                    recommendation_text = str(rec_raw.get("short", "")).strip()
+                else:
+                    parts = [
+                        str(rec_raw.get("usage", "") or "").strip(),
+                        str(rec_raw.get("evidence_level", "") or "").strip(),
+                        str(rec_raw.get("highlight", "") or "").strip(),
+                    ]
+                    recommendation_text = "，".join(p for p in parts if p)
+            if not recommendation_text:
+                recommendation_text = str(info.get("recommendation_reason", "") or "").strip()
+        paper["recommendation_text"] = recommendation_text
+
         enriched.append(paper)
     return enriched
 
 
 def compute_scores_and_select(
-    candidate_papers: list[dict],
+    enriched_papers: list[dict],
 ) -> tuple[list[dict], list[dict]]:
-    """计算推荐指数、排序并分为精选与其他。"""
-    counts = [p.get("citationCount", 0) or 0 for p in candidate_papers]
-    min_c, max_c = min(counts), max(counts)
-    if max_c == min_c:
-        norm_citations = [1.0] * len(counts)
-    else:
-        norm_citations = [(c - min_c) / (max_c - min_c) for c in counts]
+    """归一化引用得分，计算推荐指数，排序并选取精选论文。"""
+    # 归一化引用次数得分（OpenAlex cited_by_count → 内部字段 citationCount）
+    citations = [p.get("citationCount", 0) or 0 for p in enriched_papers]
+    min_cite = min(citations) if citations else 0
+    max_cite = max(citations) if citations else 1
 
-    for p, norm_c in zip(candidate_papers, norm_citations):
-        rel = float(p.get("relevance_score", 0.5))
-        p["norm_citation"] = norm_c
-        p["score"] = round((rel * 0.5 + norm_c * 0.5) * 10, 1)
+    for i, p in enumerate(enriched_papers):
+        if max_cite > min_cite:
+            norm_cite = (citations[i] - min_cite) / (max_cite - min_cite)
+        else:
+            norm_cite = 1.0
 
-    sorted_papers = sorted(candidate_papers, key=lambda x: x["score"], reverse=True)
+        relevance = float(p.get("relevance_score", 0.5))
+        # 推荐指数 = (相关度得分 × 0.5 + 归一化引用次数得分 × 0.5) × 10
+        rec_index = (relevance * 0.5 + norm_cite * 0.5) * 10
+        p["normalized_citation_score"] = round(norm_cite, 4)
+        p["recommendation_index"] = round(rec_index, 2)
+        p["score"] = p["recommendation_index"]
+
+    sorted_papers = sorted(
+        enriched_papers,
+        key=lambda x: x.get("recommendation_index", 0),
+        reverse=True,
+    )
     selected = sorted_papers[:MAX_SELECTED_PAPERS]
     other = sorted_papers[MAX_SELECTED_PAPERS:]
     return selected, other
@@ -473,7 +851,7 @@ def generate_review(api_key: str, selected_papers: list[dict]) -> str:
 
 1. 以「本期研究围绕……」开头，概括本期研究方向
 2. 以「覆盖……方向」描述主要主题分布
-3. 以「值得关注的结论有：」引出 5 条结论，每条以数字序号开头（1. 2. 3. 4. 5.）
+3. 以「值得关注的结论有：」引出结论，条数由你根据论文内容自行决定，最多不超过 5 条，每条以数字序号开头（1. 2. 3. ...）
 
 总字数 200-400 字，语言流畅自然。
 
@@ -496,7 +874,7 @@ def build_excel(review: str, selected: list[dict], other: list[dict]) -> bytes:
 
     ws1 = wb.active
     ws1.title = "文献速递"
-    ws1.merge_cells("A1:J1")
+    ws1.merge_cells("A1:L1")
     cell = ws1["A1"]
     cell.value = review
     cell.alignment = wrap
@@ -506,6 +884,8 @@ def build_excel(review: str, selected: list[dict], other: list[dict]) -> bytes:
     ws2 = wb.create_sheet("精选论文数据")
     headers2 = [
         "推荐指数",
+        "相关度得分",
+        "归一化引用得分",
         "英文标题",
         "中文标题",
         "作者",
@@ -514,28 +894,30 @@ def build_excel(review: str, selected: list[dict], other: list[dict]) -> bytes:
         "引用次数",
         "英文摘要",
         "一句话总结（中文）",
-        "推荐理由（中文）",
+        "推荐理由",
     ]
-    col_widths2 = [10, 30, 30, 20, 20, 8, 8, 50, 40, 40]
+    col_widths2 = [10, 10, 12, 30, 30, 20, 20, 8, 8, 50, 40, 50]
     for col, (h, w) in enumerate(zip(headers2, col_widths2), 1):
         c = ws2.cell(row=1, column=col, value=h)
         c.font = bold
         ws2.column_dimensions[get_column_letter(col)].width = w
 
     for row_idx, p in enumerate(selected, 2):
-        ws2.cell(row=row_idx, column=1, value=p.get("score", 0))
-        ws2.cell(row=row_idx, column=2, value=p.get("title", ""))
-        ws2.cell(row=row_idx, column=3, value=p.get("title_cn", ""))
-        ws2.cell(row=row_idx, column=4, value=p.get("authors", ""))
-        ws2.cell(row=row_idx, column=5, value=p.get("journal", ""))
-        ws2.cell(row=row_idx, column=6, value=p.get("year", ""))
-        ws2.cell(row=row_idx, column=7, value=p.get("citationCount", 0))
-        c8 = ws2.cell(row=row_idx, column=8, value=p.get("abstract", ""))
-        c8.alignment = wrap
-        c9 = ws2.cell(row=row_idx, column=9, value=p.get("one_liner", ""))
-        c9.alignment = wrap
-        c10 = ws2.cell(row=row_idx, column=10, value=p.get("recommendation_reason", ""))
+        ws2.cell(row=row_idx, column=1, value=p.get("recommendation_index", p.get("score", 0)))
+        ws2.cell(row=row_idx, column=2, value=p.get("relevance_score", ""))
+        ws2.cell(row=row_idx, column=3, value=p.get("normalized_citation_score", ""))
+        ws2.cell(row=row_idx, column=4, value=p.get("title", ""))
+        ws2.cell(row=row_idx, column=5, value=p.get("title_cn", ""))
+        ws2.cell(row=row_idx, column=6, value=p.get("authors", ""))
+        ws2.cell(row=row_idx, column=7, value=p.get("journal", ""))
+        ws2.cell(row=row_idx, column=8, value=p.get("year", ""))
+        ws2.cell(row=row_idx, column=9, value=p.get("citationCount", 0))
+        c10 = ws2.cell(row=row_idx, column=10, value=p.get("abstract", ""))
         c10.alignment = wrap
+        c11 = ws2.cell(row=row_idx, column=11, value=p.get("one_liner", ""))
+        c11.alignment = wrap
+        c12 = ws2.cell(row=row_idx, column=12, value=p.get("recommendation_text", ""))
+        c12.alignment = wrap
 
     ws3 = wb.create_sheet("其他相关论文")
     for col, h in enumerate(["英文标题", "中文标题"], 1):
@@ -558,6 +940,7 @@ def build_excel(review: str, selected: list[dict], other: list[dict]) -> bytes:
 
 def format_paper_for_api(p: dict) -> dict:
     """将内部论文字典格式化为 API 响应字段。"""
+    recommendation_index = p.get("recommendation_index", p.get("score", 0))
     return {
         "title": p.get("title", ""),
         "title_cn": p.get("title_cn", ""),
@@ -566,9 +949,12 @@ def format_paper_for_api(p: dict) -> dict:
         "year": p.get("year", 0),
         "citation_count": p.get("citationCount", 0),
         "abstract": p.get("abstract", ""),
-        "one_liner": p.get("one_liner", ""),
-        "recommendation_reason": p.get("recommendation_reason", ""),
-        "score": p.get("score", 0),
+        "one_liner": p.get("one_liner", p.get("summary_cn", "")),
+        "relevance_score": p.get("relevance_score", 0),
+        "normalized_citation_score": p.get("normalized_citation_score", 0),
+        "recommendation_index": recommendation_index,
+        "recommendation_text": p.get("recommendation_text", ""),
+        "score": recommendation_index,
     }
 
 
@@ -598,9 +984,19 @@ def run_pipeline(
     end_date_str = end_date.strftime("%Y-%m-%d")
 
     report(1, " 正在拆解兴趣，拓展搜索词...")
-    journal_names, simple_terms = expand_keywords(
-        api_key, keywords, interest, journal_input
-    )
+    p1_result = expand_keywords(api_key, keywords, interest, journal_input)
+    journal_names = p1_result["journal_names"]
+    simple_terms = p1_result["simple_terms"]
+    simple_terms_display = p1_result["simple_terms_display"]
+    core_concepts = p1_result["core_concepts"]
+    exclusion_terms = p1_result["exclusion_terms"]
+    scoring_guide = p1_result["scoring_guide"]
+    intent_type = p1_result.get("intent_type", "exploration")
+
+    print("========== P1 返回 ==========")
+    print("simple_terms:", p1_result.get("simple_terms"))
+    print("exclusion_terms:", p1_result.get("exclusion_terms"))
+    print("journal_names:", p1_result.get("journal_names"))
 
     journal_names_for_fetch = journal_names if journal_input.strip() else []
 
@@ -608,6 +1004,15 @@ def run_pipeline(
         report(2, f" 正在从 OpenAlex 抓取论文...（已获取 {count} 篇）")
 
     report(2, " 正在从 OpenAlex 抓取论文...")
+    query = simple_terms
+    journals_param = journal_names_for_fetch
+    date_from = start_date_str
+    date_to = end_date_str
+    print("========== OpenAlex 查询串 ==========")
+    print(f"查询: {query}")
+    print(f"期刊过滤: {journals_param if journals_param else '无'}")
+    print(f"时间范围: {date_from} 至 {date_to}")
+    print("================================")
     raw_papers = fetch_papers_openalex(
         simple_terms,
         start_date_str,
@@ -615,6 +1020,10 @@ def run_pipeline(
         journal_names_for_fetch,
         progress_callback=on_fetch_progress,
     )
+    if exclusion_terms:
+        before = len(raw_papers)
+        raw_papers = filter_papers_by_exclusion(raw_papers, exclusion_terms)
+        print(f" 排除词过滤：{before} -> {len(raw_papers)} 篇")
 
     if not raw_papers:
         raise ValueError("未找到符合日期或期刊条件的论文，请调整关键词或时间范围后重试。")
@@ -625,7 +1034,14 @@ def run_pipeline(
     total_batches = (len(raw_papers) + batch_size_filter - 1) // batch_size_filter
     for b in range(total_batches):
         batch = raw_papers[b * batch_size_filter : (b + 1) * batch_size_filter]
-        filtered = filter_papers_batch(api_key, batch, interest, b + 1)
+        filtered = filter_papers_batch(
+            api_key,
+            batch,
+            interest,
+            b + 1,
+            core_concepts=core_concepts,
+            scoring_guide=scoring_guide,
+        )
         candidate_papers.extend(filtered)
         report(
             3,
@@ -642,7 +1058,13 @@ def run_pipeline(
     total_enrich = (len(candidate_papers) + batch_size_enrich - 1) // batch_size_enrich
     for b in range(total_enrich):
         batch = candidate_papers[b * batch_size_enrich : (b + 1) * batch_size_enrich]
-        enriched = enrich_papers_batch(api_key, batch, interest)
+        enriched = enrich_papers_batch(
+            api_key,
+            batch,
+            interest,
+            core_concepts=core_concepts,
+            intent_type=intent_type,
+        )
         enriched_all.extend(enriched)
         report(4, f" 正在生成总结与评分...（第 {b + 1}/{total_enrich} 批）")
         time.sleep(0.5)
@@ -665,7 +1087,7 @@ def run_pipeline(
         "summary": review,
         "selected_papers": [format_paper_for_api(p) for p in selected_papers],
         "other_papers_count": len(other_papers),
-        "simple_terms": simple_terms,
+        "simple_terms": simple_terms_display,
         "journals_used": journals_used,
         "time_range": time_label,
         "interest": interest,
@@ -680,6 +1102,11 @@ def run_pipeline(
 app = FastAPI(title="LOOKLOOK API", description="文献检索与智能速递后端")
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
 
 
 class SearchRequest(BaseModel):
@@ -700,6 +1127,45 @@ class TaskStatusResponse(BaseModel):
     done: bool
     result: dict[str, Any] | None = None
     error: str | None = None
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(..., description="用户邮箱")
+    username: str = Field(..., description="用户名")
+    password: str = Field(..., description="登录密码")
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., description="用户邮箱")
+    password: str = Field(..., description="登录密码")
+
+
+class RegisterResponse(BaseModel):
+    message: str
+    user_id: int
+
+
+class LoginResponse(BaseModel):
+    token: str
+    user_id: int
+    username: str
+
+
+class MeResponse(BaseModel):
+    user_id: int
+    email: str
+    username: str
+
+
+class HistoryItemResponse(BaseModel):
+    id: int
+    interest_desc: str | None = None
+    keywords: str | None = None
+    simple_terms: str | None = None
+    time_range: str | None = None
+    journals: str | None = None
+    summary: str | None = None
+    created_at: str
 
 
 def _update_task(
@@ -726,7 +1192,7 @@ def _update_task(
             task_status[task_id]["error"] = error
 
 
-def _run_search_task(task_id: str, req: SearchRequest) -> None:
+def _run_search_task(task_id: str, req: SearchRequest, user_id: int | None = None) -> None:
     """后台线程执行流水线，更新 task_status。"""
 
     def on_status(step: int, message: str) -> None:
@@ -744,6 +1210,8 @@ def _run_search_task(task_id: str, req: SearchRequest) -> None:
         )
         excel_bytes = result.pop("excel_bytes")
         result["excel_base64"] = base64.b64encode(excel_bytes).decode("utf-8")
+        if user_id is not None:
+            save_search_history(user_id, req, result)
         _update_task(
             task_id,
             step=5,
@@ -776,6 +1244,103 @@ def health():
     return {"status": "healthy"}
 
 
+@app.post("/api/register", response_model=RegisterResponse)
+def api_register(req: RegisterRequest):
+    email = _normalize_email(req.email)
+    username = req.username.strip()
+    password = req.password
+
+    if not _is_valid_email(email):
+        raise HTTPException(status_code=400, detail="邮箱格式无效")
+    if not username:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+    if not password:
+        raise HTTPException(status_code=400, detail="密码不能为空")
+
+    if _get_user_by_email(email) is not None:
+        raise HTTPException(status_code=400, detail="该邮箱已注册")
+
+    password_hash = hash_password(password)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO users (email, username, password_hash) VALUES (?, ?, ?)",
+                (email, username, password_hash),
+            )
+            conn.commit()
+            user_id = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="该邮箱已注册") from None
+
+    if user_id is None:
+        raise HTTPException(status_code=500, detail="注册失败，请稍后重试")
+
+    return RegisterResponse(message="注册成功", user_id=user_id)
+
+
+@app.get("/api/me", response_model=MeResponse)
+def api_me(authorization: str | None = Header(default=None)):
+    user_id = _require_user_id_from_header(authorization)
+    user = _get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    return MeResponse(
+        user_id=user["id"],
+        email=user["email"],
+        username=user["username"],
+    )
+
+
+@app.get("/api/user/history", response_model=list[HistoryItemResponse])
+def api_user_history(authorization: str | None = Header(default=None)):
+    """返回当前登录用户的检索记录，按时间倒序。"""
+    user_id = _require_user_id_from_header(authorization)
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, interest_desc, keywords, simple_terms, time_range,
+                   journals, summary, created_at
+            FROM search_history
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [
+        HistoryItemResponse(
+            id=row["id"],
+            interest_desc=row["interest_desc"],
+            keywords=row["keywords"],
+            simple_terms=row["simple_terms"],
+            time_range=row["time_range"],
+            journals=row["journals"],
+            summary=row["summary"],
+            created_at=str(row["created_at"]),
+        )
+        for row in rows
+    ]
+
+
+@app.post("/api/login", response_model=LoginResponse)
+def api_login(req: LoginRequest):
+    email = _normalize_email(req.email)
+    password = req.password
+
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="邮箱和密码不能为空")
+
+    user = _get_user_by_email(email)
+    if user is None or not verify_password(password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+
+    token = create_access_token(user["id"], user["email"])
+    return LoginResponse(
+        token=token,
+        user_id=user["id"],
+        username=user["username"],
+    )
+
+
 @app.get("/api/mode")
 def api_mode():
     """返回当前是否为免 Key 模式。"""
@@ -798,9 +1363,14 @@ def _resolve_api_key(client_api_key: str) -> str:
 
 
 @app.post("/api/search", response_model=TaskStartResponse)
-def api_search(req: SearchRequest):
+def api_search(
+    req: SearchRequest,
+    authorization: str | None = Header(default=None),
+):
     """创建异步检索任务，立即返回 task_id。"""
     effective_api_key = _resolve_api_key(req.api_key)
+    user_id = _optional_user_id_from_header(authorization)
+    # 已登录用户：流水线成功后在后台线程写入 search_history
     if not req.interest or not req.interest.strip():
         raise HTTPException(status_code=400, detail="请提供个人兴趣描述")
     if req.time_range not in TIME_RANGE_OPTIONS:
@@ -820,7 +1390,11 @@ def api_search(req: SearchRequest):
         }
 
     req.api_key = effective_api_key
-    thread = threading.Thread(target=_run_search_task, args=(task_id, req), daemon=True)
+    thread = threading.Thread(
+        target=_run_search_task,
+        args=(task_id, req, user_id),
+        daemon=True,
+    )
     thread.start()
     return TaskStartResponse(task_id=task_id)
 

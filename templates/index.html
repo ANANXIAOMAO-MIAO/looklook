@@ -374,6 +374,7 @@
     }
 
     .modal {
+      position: relative;
       background: var(--card-bg);
       backdrop-filter: blur(28px) saturate(1.4);
       -webkit-backdrop-filter: blur(28px) saturate(1.4);
@@ -384,6 +385,30 @@
       max-width: 480px;
       width: 100%;
       text-align: center;
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      width: 32px;
+      height: 32px;
+      border: none;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.5);
+      color: var(--text-secondary);
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+
+    .modal-close:hover {
+      background: rgba(255, 255, 255, 0.85);
+      color: var(--text-primary);
     }
 
     .modal-spinner {
@@ -914,6 +939,42 @@
       padding-top: 12px;
     }
 
+    .usage-remaining {
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+    }
+
+    .usage-remaining strong {
+      color: var(--accent-deep);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .quota-modal {
+      text-align: center;
+    }
+
+    .quota-message {
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--text-primary);
+      margin-bottom: 1.5rem;
+    }
+
+    .quota-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .quota-actions .btn-primary,
+    .quota-actions .btn-secondary {
+      width: 100%;
+      min-width: 0;
+    }
+
     .hint-text {
       font-size: 13px;
       color: var(--text-secondary);
@@ -987,6 +1048,7 @@
             <option value="五年内">五年内</option>
           </select>
         </div>
+        <p class="usage-remaining" id="usageRemaining">今日剩余搜索：<strong>—</strong> 次</p>
         <div class="btn-row">
           <button type="button" class="btn-primary" id="startBtn">开始分析</button>
         </div>
@@ -1075,6 +1137,16 @@
     </div>
   </div>
 
+  <div id="quotaOverlay" class="auth-overlay" aria-hidden="true">
+    <div class="auth-modal quota-modal" role="alertdialog" aria-labelledby="quotaMessage">
+      <p class="quota-message" id="quotaMessage"></p>
+      <div class="quota-actions">
+        <button type="button" class="btn-primary" id="quotaLoginBtn" style="display: none;">去登录</button>
+        <button type="button" class="btn-secondary" id="quotaCloseBtn">知道了</button>
+      </div>
+    </div>
+  </div>
+
   <div id="authOverlay" class="auth-overlay" aria-hidden="true">
     <div class="auth-modal" role="dialog" aria-labelledby="authModalTitle">
       <h2 class="auth-modal-title" id="authModalTitle">登录</h2>
@@ -1104,6 +1176,7 @@
 
   <div id="overlay" class="overlay" aria-hidden="true">
     <div class="modal" role="dialog" aria-labelledby="modalTitle">
+      <button type="button" class="modal-close" id="modalCloseBtn" aria-label="关闭并取消搜索">×</button>
       <div class="modal-spinner"></div>
       <h2 class="modal-title" id="modalTitle">AI 正在为你筛选前沿文献</h2>
       <p class="modal-estimate">预计需要 3-5 分钟</p>
@@ -1123,8 +1196,10 @@
     const STORAGE_TOKEN = 'looklook_token';
     const STORAGE_USERNAME = 'looklook_username';
     const STORAGE_USER_ID = 'looklook_user_id';
+    const STORAGE_SESSION = 'looklook_session_id';
 
     let lastResult = null;
+    let currentTaskId = null;
     let pollTimer = null;
     let elapsedTimer = null;
     let elapsedSeconds = 0;
@@ -1145,6 +1220,7 @@
     const authModalTitle = document.getElementById('authModalTitle');
     const errorBox = document.getElementById('errorBox');
     const overlay = document.getElementById('overlay');
+    const modalCloseBtn = document.getElementById('modalCloseBtn');
     const modalMessage = document.getElementById('modalMessage');
     const elapsedTimeEl = document.getElementById('elapsedTime');
     const stepItems = document.querySelectorAll('.step-item');
@@ -1154,6 +1230,11 @@
     const journalEl = document.getElementById('journal');
     const timeRangeEl = document.getElementById('timeRange');
     const startBtn = document.getElementById('startBtn');
+    const usageRemainingEl = document.getElementById('usageRemaining');
+    const quotaOverlay = document.getElementById('quotaOverlay');
+    const quotaMessageEl = document.getElementById('quotaMessage');
+    const quotaLoginBtn = document.getElementById('quotaLoginBtn');
+    const quotaCloseBtn = document.getElementById('quotaCloseBtn');
     const advancedToggle = document.getElementById('advancedToggle');
     const advancedPanel = document.getElementById('advancedPanel');
     const apiKeyRequired = document.getElementById('apiKeyRequired');
@@ -1161,6 +1242,50 @@
 
     function showError(msg) { errorBox.textContent = msg; errorBox.classList.add('visible'); }
     function hideError() { errorBox.classList.remove('visible'); errorBox.textContent = ''; }
+
+    function getSessionId() {
+      let sid = localStorage.getItem(STORAGE_SESSION);
+      if (!sid) {
+        sid = Math.random().toString(36).substring(2) + Date.now().toString(36);
+        localStorage.setItem(STORAGE_SESSION, sid);
+      }
+      return sid;
+    }
+
+    function renderUsageRemaining(data) {
+      if (!usageRemainingEl || !data) return;
+      const limit = data.limit ?? (data.logged_in ? 20 : 3);
+      const remaining = data.remaining ?? 0;
+      const label = data.logged_in ? '登录用户' : '免费';
+      usageRemainingEl.innerHTML =
+        `今日剩余搜索（${label}）：<strong>${remaining}</strong> / ${limit} 次`;
+    }
+
+    async function refreshUsageRemaining() {
+      if (!usageRemainingEl) return;
+      try {
+        const params = new URLSearchParams({ session_id: getSessionId() });
+        const resp = await fetch('/api/usage/remaining?' + params.toString(), {
+          headers: getAuthHeaders(),
+        });
+        const data = await resp.json();
+        if (resp.ok) renderUsageRemaining(data);
+      } catch (_) {
+        usageRemainingEl.innerHTML = '今日剩余搜索：<strong>—</strong> 次';
+      }
+    }
+
+    function showQuotaDialog(message, showLogin) {
+      quotaMessageEl.textContent = message;
+      quotaLoginBtn.style.display = showLogin ? '' : 'none';
+      quotaOverlay.classList.add('visible');
+      quotaOverlay.setAttribute('aria-hidden', 'false');
+    }
+
+    function hideQuotaDialog() {
+      quotaOverlay.classList.remove('visible');
+      quotaOverlay.setAttribute('aria-hidden', 'true');
+    }
     function setFormDisabled(disabled) {
       formControls.forEach((el) => { el.disabled = disabled; });
       if (freeMode) apiKeyEl.disabled = true;
@@ -1201,6 +1326,7 @@
       localStorage.setItem(STORAGE_USER_ID, authUserId);
       localStorage.setItem(STORAGE_USERNAME, username);
       updateAuthUI();
+      refreshUsageRemaining();
     }
     function clearAuth() {
       authToken = '';
@@ -1210,21 +1336,39 @@
       localStorage.removeItem(STORAGE_USER_ID);
       localStorage.removeItem(STORAGE_USERNAME);
       updateAuthUI();
+      refreshUsageRemaining();
     }
     function updateAuthUI() {
       const loggedIn = !!authToken;
       loginBtn.style.display = loggedIn ? 'none' : '';
       profileBtn.style.display = loggedIn ? '' : 'none';
     }
+    function restoreAuthFromStorage() {
+      authToken = localStorage.getItem(STORAGE_TOKEN) || '';
+      authUsername = localStorage.getItem(STORAGE_USERNAME) || '';
+      authUserId = localStorage.getItem(STORAGE_USER_ID) || '';
+      updateAuthUI();
+    }
+    function isAuthInvalidStatus(status) {
+      return status === 401 || status === 403;
+    }
     async function validateStoredAuth() {
-      if (!authToken) { updateAuthUI(); return; }
+      if (!authToken) return;
       try {
         const resp = await fetch('/api/me', { headers: getAuthHeaders() });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error('invalid');
+        let data = {};
+        try {
+          data = await resp.json();
+        } catch (_) {
+          data = {};
+        }
+        if (!resp.ok) {
+          if (isAuthInvalidStatus(resp.status)) clearAuth();
+          return;
+        }
         persistAuth(authToken, data.user_id, data.username);
       } catch (_) {
-        clearAuth();
+        /* 网络异常时保留 localStorage 中的乐观登录态 */
       }
     }
     function showAuthError(msg) {
@@ -1401,7 +1545,17 @@
         emptyEl.textContent = err.message || '加载查询记录失败';
       }
     }
-    validateStoredAuth();
+    getSessionId();
+    restoreAuthFromStorage();
+    quotaCloseBtn.addEventListener('click', hideQuotaDialog);
+    quotaLoginBtn.addEventListener('click', () => {
+      hideQuotaDialog();
+      openAuthModal('login');
+    });
+    quotaOverlay.addEventListener('click', (e) => {
+      if (e.target === quotaOverlay) hideQuotaDialog();
+    });
+    validateStoredAuth().then(() => refreshUsageRemaining());
     initAppMode();
     function switchView(view) {
       inputView.classList.toggle('active', view === 'input');
@@ -1438,6 +1592,37 @@
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
     }
+
+    function clearCurrentTask() {
+      currentTaskId = null;
+    }
+
+    async function cancelCurrentTask(useKeepalive) {
+      const taskId = currentTaskId;
+      if (!taskId) return;
+      const url = '/api/search/cancel?task_id=' + encodeURIComponent(taskId);
+      try {
+        if (useKeepalive) {
+          fetch(url, { method: 'POST', keepalive: true });
+        } else {
+          await fetch(url, { method: 'POST' });
+        }
+      } catch (_) { /* 页面卸载时忽略网络错误 */ }
+      clearCurrentTask();
+    }
+
+    function dismissSearchOverlay() {
+      stopTimers();
+      hideOverlay();
+      setFormDisabled(false);
+      resetStepUI();
+      clearCurrentTask();
+    }
+
+    async function handleCloseSearch() {
+      await cancelCurrentTask(false);
+      dismissSearchOverlay();
+    }
     function resetStepUI() {
       stepItems.forEach((el) => {
         el.classList.remove('active', 'done');
@@ -1460,6 +1645,11 @@
       modalMessage.textContent = status.message || '';
       if (!status.done) return;
       stopTimers();
+      clearCurrentTask();
+      if (status.cancelled) {
+        dismissSearchOverlay();
+        return;
+      }
       if (status.error) {
         hideOverlay(); setFormDisabled(false); resetStepUI(); showError(status.error); return;
       }
@@ -1467,6 +1657,7 @@
         lastResult = status.result;
         updateStepUI(5, true);
         modalMessage.textContent = '分析完成！';
+        if (authToken) loadSearchHistory();
         setTimeout(() => {
           hideOverlay(); renderResults(status.result); switchView('result');
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1474,12 +1665,13 @@
       }
     }
     function startPolling(taskId) {
+      currentTaskId = taskId;
       const tick = async () => {
         try {
           const status = await pollTaskStatus(taskId);
           await handleStatusUpdate(status);
         } catch (err) {
-          stopTimers(); hideOverlay(); setFormDisabled(false); resetStepUI();
+          dismissSearchOverlay();
           showError(err.message || '轮询失败');
         }
       };
@@ -1511,6 +1703,7 @@
         keywords: keywordsEl.value.trim(),
         journal_input: journalEl.value.trim(),
         time_range: timeRangeEl.value,
+        session_id: getSessionId(),
       };
       if (!freeMode) payload.api_key = apiKeyEl.value.trim();
       try {
@@ -1520,14 +1713,23 @@
           body: JSON.stringify(payload),
         });
         const data = await resp.json();
+        if (resp.status === 429) {
+          const detail = data.detail || '今日搜索次数已用完。';
+          const msg = typeof detail === 'string' ? detail : JSON.stringify(detail);
+          dismissSearchOverlay();
+          showQuotaDialog(msg, !authToken);
+          refreshUsageRemaining();
+          return;
+        }
         if (!resp.ok) {
           const detail = data.detail || data.error || JSON.stringify(data);
           throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
         }
         modalMessage.textContent = '任务已创建，开始处理...';
+        refreshUsageRemaining();
         startPolling(data.task_id);
       } catch (err) {
-        stopTimers(); hideOverlay(); setFormDisabled(false); resetStepUI();
+        dismissSearchOverlay();
         showError(err.message || '请求失败，请稍后重试。');
       }
     });
@@ -1625,8 +1827,12 @@
         URL.revokeObjectURL(url);
       } catch (e) { showError('下载失败：' + e.message); }
     });
+    modalCloseBtn.addEventListener('click', handleCloseSearch);
+    window.addEventListener('pagehide', () => {
+      if (currentTaskId) cancelCurrentTask(true);
+    });
     document.getElementById('backBtn').addEventListener('click', () => {
-      stopTimers(); lastResult = null; hideError(); hideOverlay(); resetStepUI();
+      stopTimers(); clearCurrentTask(); lastResult = null; hideError(); hideOverlay(); resetStepUI();
       setFormDisabled(false); switchView('input');
       advancedPanel.classList.remove('open');
       advancedToggle.classList.remove('open');

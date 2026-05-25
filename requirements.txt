@@ -5,3 +5,4 @@ fastapi
 uvicorn[standard]
 pydantic
 pyjwt
+psycopg[binary,pool]>=3.1

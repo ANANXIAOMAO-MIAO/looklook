@@ -14,15 +14,21 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 import jwt
 import requests
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
@@ -57,12 +63,17 @@ TIME_RANGE_DAYS = {
     "五年内": 1825,
 }
 
-# 异步任务进度存储 {task_id: {step, message, done, result, error}}
+# 异步任务进度存储 {task_id: {step, message, done, cancelled, result, error}}
 task_status: dict[str, dict[str, Any]] = {}
 task_lock = threading.Lock()
 
-# 用户认证
+
+class TaskCancelledError(Exception):
+    """用户取消搜索任务。"""
+
+# 数据库：生产用 DATABASE_URL（Supabase PostgreSQL），本地默认 SQLite 文件
 DB_PATH = Path(__file__).parent / "looklook.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 JWT_SECRET_KEY = "looklook-jwt-secret-change-in-production"
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = 7
@@ -73,20 +84,123 @@ SCRYPT_P = 1
 SCRYPT_DKLEN = 64
 SCRYPT_SALT_LEN = 16
 
+ANONYMOUS_DAILY_LIMIT = 3
+LOGGED_IN_DAILY_LIMIT = 20
+USAGE_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
 # ---------------------------------------------------------------------------
 # 数据库与用户认证
 # ---------------------------------------------------------------------------
 
+_db_pool: ConnectionPool | None = None
+PG_POOL_MIN_SIZE = 2
+PG_POOL_MAX_SIZE = 10
 
-def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def _use_postgres() -> bool:
+    url = DATABASE_URL
+    if not url or url.startswith("sqlite:"):
+        return False
+    return url.startswith(("postgresql://", "postgres://"))
+
+
+def _sql(query: str) -> str:
+    """SQLite 使用 ? 占位符；PostgreSQL 使用 %s。"""
+    return query.replace("?", "%s") if _use_postgres() else query
+
+
+def _is_unique_violation(exc: BaseException) -> bool:
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    return isinstance(exc, psycopg.errors.UniqueViolation)
+
+
+def init_db_pool() -> None:
+    """启动时创建 PostgreSQL 连接池（复用连接，降低远程库延迟）。"""
+    global _db_pool
+    if not _use_postgres() or _db_pool is not None:
+        return
+    _db_pool = ConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=PG_POOL_MIN_SIZE,
+        max_size=PG_POOL_MAX_SIZE,
+        kwargs={"row_factory": dict_row},
+        timeout=30,
+    )
+
+
+def close_db_pool() -> None:
+    global _db_pool
+    if _db_pool is not None:
+        _db_pool.close()
+        _db_pool = None
+
+
+@contextmanager
+def get_db_connection() -> Iterator[Any]:
+    if _use_postgres():
+        if _db_pool is None:
+            init_db_pool()
+        assert _db_pool is not None
+        with _db_pool.connection() as conn:
+            yield conn
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def _db_execute(conn: Any, query: str, params: tuple[Any, ...] = ()) -> Any:
+    return conn.execute(_sql(query), params)
 
 
 def init_db() -> None:
-    with get_db_connection() as conn:
-        conn.executescript(
+    if _use_postgres():
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                username TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS search_history (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                interest_desc TEXT,
+                keywords TEXT,
+                simple_terms TEXT,
+                time_range TEXT,
+                journals TEXT,
+                summary TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS anonymous_usage (
+                identifier TEXT NOT NULL,
+                search_date DATE NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (identifier, search_date)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_usage (
+                user_id INTEGER NOT NULL,
+                search_date DATE NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, search_date)
+            )
+            """,
+        ]
+    else:
+        statements = [
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +208,9 @@ def init_db() -> None:
                 username TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS search_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -106,10 +222,150 @@ def init_db() -> None:
                 summary TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(id)
-            );
+            )
+            """,
             """
-        )
+            CREATE TABLE IF NOT EXISTS anonymous_usage (
+                identifier TEXT NOT NULL,
+                search_date DATE NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (identifier, search_date)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS user_usage (
+                user_id INTEGER NOT NULL,
+                search_date DATE NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, search_date)
+            )
+            """,
+        ]
+
+    with get_db_connection() as conn:
+        for stmt in statements:
+            _db_execute(conn, stmt)
         conn.commit()
+
+    backend = "PostgreSQL (DATABASE_URL)" if _use_postgres() else f"SQLite ({DB_PATH})"
+    print(f"[LOOKLOOK] 数据库已初始化: {backend}")
+
+
+def _today_cn() -> date:
+    return datetime.now(USAGE_TIMEZONE).date()
+
+
+def _date_str(d: date | None = None) -> str:
+    return (d or _today_cn()).isoformat()
+
+
+def _get_anonymous_used(identifier: str, search_date: str | None = None) -> int:
+    with get_db_connection() as conn:
+        row = _db_execute(
+            conn,
+            "SELECT count FROM anonymous_usage WHERE identifier = ? AND search_date = ?",
+            (identifier, search_date or _date_str()),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def _get_user_used(user_id: int, search_date: str | None = None) -> int:
+    with get_db_connection() as conn:
+        row = _db_execute(
+            conn,
+            "SELECT count FROM user_usage WHERE user_id = ? AND search_date = ?",
+            (user_id, search_date or _date_str()),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def consume_anonymous_usage(identifier: str) -> bool:
+    """扣减匿名用户今日配额，有余量返回 True。"""
+    identifier = (identifier or "").strip()
+    if not identifier:
+        return False
+    today = _date_str()
+    with get_db_connection() as conn:
+        row = _db_execute(
+            conn,
+            "SELECT count FROM anonymous_usage WHERE identifier = ? AND search_date = ?",
+            (identifier, today),
+        ).fetchone()
+        current = int(row["count"]) if row else 0
+        if current >= ANONYMOUS_DAILY_LIMIT:
+            return False
+        if row:
+            _db_execute(
+                conn,
+                "UPDATE anonymous_usage SET count = count + 1 WHERE identifier = ? AND search_date = ?",
+                (identifier, today),
+            )
+        else:
+            _db_execute(
+                conn,
+                "INSERT INTO anonymous_usage (identifier, search_date, count) VALUES (?, ?, 1)",
+                (identifier, today),
+            )
+        conn.commit()
+    return True
+
+
+def consume_user_usage(user_id: int) -> bool:
+    """扣减登录用户今日配额，有余量返回 True。"""
+    today = _date_str()
+    with get_db_connection() as conn:
+        row = _db_execute(
+            conn,
+            "SELECT count FROM user_usage WHERE user_id = ? AND search_date = ?",
+            (user_id, today),
+        ).fetchone()
+        current = int(row["count"]) if row else 0
+        if current >= LOGGED_IN_DAILY_LIMIT:
+            return False
+        if row:
+            _db_execute(
+                conn,
+                "UPDATE user_usage SET count = count + 1 WHERE user_id = ? AND search_date = ?",
+                (user_id, today),
+            )
+        else:
+            _db_execute(
+                conn,
+                "INSERT INTO user_usage (user_id, search_date, count) VALUES (?, ?, 1)",
+                (user_id, today),
+            )
+        conn.commit()
+    return True
+
+
+def build_usage_snapshot(
+    *,
+    user_id: int | None,
+    identifier: str | None,
+) -> dict[str, Any]:
+    if user_id is not None:
+        used = _get_user_used(user_id)
+        limit = LOGGED_IN_DAILY_LIMIT
+        logged_in = True
+    else:
+        ident = (identifier or "").strip()
+        used = _get_anonymous_used(ident) if ident else 0
+        limit = ANONYMOUS_DAILY_LIMIT
+        logged_in = False
+    return {
+        "limit": limit,
+        "used": used,
+        "remaining": max(0, limit - used),
+        "logged_in": logged_in,
+    }
+
+
+def _resolve_anonymous_identifier(session_id: str | None, client_host: str | None) -> str:
+    sid = (session_id or "").strip()
+    if sid:
+        return sid
+    host = (client_host or "").strip()
+    return host or "unknown"
 
 
 def hash_password(password: str) -> str:
@@ -162,18 +418,20 @@ def _is_valid_email(email: str) -> bool:
     return bool(EMAIL_PATTERN.match(email))
 
 
-def _get_user_by_email(email: str) -> sqlite3.Row | None:
+def _get_user_by_email(email: str) -> Any | None:
     with get_db_connection() as conn:
-        row = conn.execute(
+        row = _db_execute(
+            conn,
             "SELECT id, email, username, password_hash FROM users WHERE email = ?",
             (email,),
         ).fetchone()
     return row
 
 
-def _get_user_by_id(user_id: int) -> sqlite3.Row | None:
+def _get_user_by_id(user_id: int) -> Any | None:
     with get_db_connection() as conn:
-        return conn.execute(
+        return _db_execute(
+            conn,
             "SELECT id, email, username FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
@@ -224,7 +482,8 @@ def save_search_history(user_id: int, req: SearchRequest, result: dict[str, Any]
     journals = result.get("journals_used") or []
     journals_text = json.dumps(journals, ensure_ascii=False) if journals else ""
     with get_db_connection() as conn:
-        conn.execute(
+        _db_execute(
+            conn,
             """
             INSERT INTO search_history (
                 user_id, interest_desc, keywords, simple_terms,
@@ -504,12 +763,16 @@ def fetch_papers_openalex(
     journal_names: list[str],
     progress_callback: Callable[[int], None] | None = None,
     max_papers: int = MAX_FETCH_PAPERS,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[dict]:
     """使用 OpenAlex API 抓取论文。"""
     papers: list[dict] = []
     page = 1
 
     while True:
+        if cancel_check and cancel_check():
+            raise TaskCancelledError("搜索已取消")
+
         params = {
             "search": search_terms,
             "filter": f"from_publication_date:{start_date},to_publication_date:{end_date}",
@@ -1167,16 +1430,22 @@ def run_pipeline(
     time_label: str,
     interest: str,
     status_callback: Callable[[int, str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """
     主处理流程，返回完整结果字典。
     status_callback: 接收 (step 1-5, message) 用于任务进度更新。
+    cancel_check: 返回 True 时抛出 TaskCancelledError 终止流水线。
     """
 
     def report(step: int, msg: str) -> None:
         print(msg)
         if status_callback:
             status_callback(step, msg)
+
+    def ensure_not_cancelled() -> None:
+        if cancel_check and cancel_check():
+            raise TaskCancelledError("搜索已取消")
 
     keywords = keywords or ""
     journal_input = journal_input or ""
@@ -1185,8 +1454,10 @@ def run_pipeline(
     start_date_str = start_date.strftime("%Y-%m-%d")
     end_date_str = end_date.strftime("%Y-%m-%d")
 
+    ensure_not_cancelled()
     report(1, " 正在拆解兴趣，拓展搜索词...")
     p1_result = expand_keywords(api_key, keywords, interest, journal_input)
+    ensure_not_cancelled()
     journal_names = p1_result["journal_names"]
     simple_terms = p1_result["simple_terms"]
     simple_terms_display = p1_result["simple_terms_display"]
@@ -1221,7 +1492,9 @@ def run_pipeline(
         end_date_str,
         journal_names_for_fetch,
         progress_callback=on_fetch_progress,
+        cancel_check=cancel_check,
     )
+    ensure_not_cancelled()
     if exclusion_terms:
         before = len(raw_papers)
         raw_papers = filter_papers_by_exclusion(raw_papers, exclusion_terms)
@@ -1237,6 +1510,7 @@ def run_pipeline(
     batch_size_filter = 10
     total_batches = (len(raw_papers) + batch_size_filter - 1) // batch_size_filter
     for b in range(total_batches):
+        ensure_not_cancelled()
         batch = raw_papers[b * batch_size_filter : (b + 1) * batch_size_filter]
         filtered = filter_papers_batch(
             api_key,
@@ -1264,6 +1538,7 @@ def run_pipeline(
     batch_size_enrich = 5
     total_enrich = (len(candidate_papers) + batch_size_enrich - 1) // batch_size_enrich
     for b in range(total_enrich):
+        ensure_not_cancelled()
         batch = candidate_papers[b * batch_size_enrich : (b + 1) * batch_size_enrich]
         enriched = enrich_papers_batch(
             api_key,
@@ -1279,17 +1554,20 @@ def run_pipeline(
         )
         time.sleep(0.5)
 
+    ensure_not_cancelled()
     recommended_papers, all_relevant_papers = compute_scores_and_select(enriched_all)
     recommended_count = len(recommended_papers)
     selection_ratio = (
         round(recommended_count / relevant_count, 4) if relevant_count > 0 else 0.0
     )
 
+    ensure_not_cancelled()
     report(5, " 正在生成综述...")
     review = generate_review(
         api_key, recommended_papers, intent_type=intent_type
     )
 
+    ensure_not_cancelled()
     report(5, " 正在生成 Excel...")
     excel_bytes = build_excel(review, recommended_papers, all_relevant_papers)
 
@@ -1327,7 +1605,14 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 @app.on_event("startup")
 def on_startup() -> None:
+    if _use_postgres():
+        init_db_pool()
     init_db()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    close_db_pool()
 
 
 class SearchRequest(BaseModel):
@@ -1336,6 +1621,14 @@ class SearchRequest(BaseModel):
     keywords: str = Field(default="", description="可选关键词")
     journal_input: str = Field(default="", description="可选期刊名")
     time_range: str = Field(default="三年内", description="时间范围")
+    session_id: str = Field(default="", description="匿名用户会话标识")
+
+
+class UsageRemainingResponse(BaseModel):
+    limit: int
+    used: int
+    remaining: int
+    logged_in: bool
 
 
 class TaskStartResponse(BaseModel):
@@ -1346,6 +1639,7 @@ class TaskStatusResponse(BaseModel):
     step: int
     message: str
     done: bool
+    cancelled: bool = False
     result: dict[str, Any] | None = None
     error: str | None = None
 
@@ -1395,6 +1689,7 @@ def _update_task(
     step: int | None = None,
     message: str | None = None,
     done: bool | None = None,
+    cancelled: bool | None = None,
     result: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> None:
@@ -1407,20 +1702,57 @@ def _update_task(
             task_status[task_id]["message"] = message
         if done is not None:
             task_status[task_id]["done"] = done
+        if cancelled is not None:
+            task_status[task_id]["cancelled"] = cancelled
         if result is not None:
             task_status[task_id]["result"] = result
         if error is not None:
             task_status[task_id]["error"] = error
 
 
+def _is_task_cancelled(task_id: str) -> bool:
+    with task_lock:
+        task = task_status.get(task_id)
+        return bool(task and task.get("cancelled"))
+
+
+def request_cancel_task(task_id: str) -> bool:
+    """标记任务为已取消；任务尚未结束时返回 True。"""
+    with task_lock:
+        task = task_status.get(task_id)
+        if not task or task.get("done"):
+            return False
+        task["cancelled"] = True
+        return True
+
+
+def _finalize_cancelled_task(task_id: str) -> None:
+    _update_task(
+        task_id,
+        done=True,
+        cancelled=True,
+        message="搜索已取消",
+        error=None,
+        result=None,
+    )
+
+
 def _run_search_task(task_id: str, req: SearchRequest, user_id: int | None = None) -> None:
     """后台线程执行流水线，更新 task_status。"""
 
     def on_status(step: int, message: str) -> None:
+        if _is_task_cancelled(task_id):
+            raise TaskCancelledError("搜索已取消")
         _update_task(task_id, step=step, message=message)
+
+    def cancel_check() -> bool:
+        return _is_task_cancelled(task_id)
 
     try:
         _update_task(task_id, step=0, message="正在准备...")
+        if _is_task_cancelled(task_id):
+            _finalize_cancelled_task(task_id)
+            return
         result = run_pipeline(
             api_key=req.api_key.strip(),
             keywords=req.keywords.strip() if req.keywords else "",
@@ -1428,7 +1760,11 @@ def _run_search_task(task_id: str, req: SearchRequest, user_id: int | None = Non
             time_label=req.time_range,
             interest=req.interest.strip(),
             status_callback=on_status,
+            cancel_check=cancel_check,
         )
+        if _is_task_cancelled(task_id):
+            _finalize_cancelled_task(task_id)
+            return
         excel_bytes = result.pop("excel_bytes")
         result["excel_base64"] = base64.b64encode(excel_bytes).decode("utf-8")
         if user_id is not None:
@@ -1440,9 +1776,17 @@ def _run_search_task(task_id: str, req: SearchRequest, user_id: int | None = Non
             done=True,
             result=result,
         )
+    except TaskCancelledError:
+        _finalize_cancelled_task(task_id)
     except ValueError as e:
+        if _is_task_cancelled(task_id):
+            _finalize_cancelled_task(task_id)
+            return
         _update_task(task_id, done=True, error=str(e), message=str(e))
     except Exception as e:
+        if _is_task_cancelled(task_id):
+            _finalize_cancelled_task(task_id)
+            return
         _update_task(
             task_id,
             done=True,
@@ -1482,16 +1826,28 @@ def api_register(req: RegisterRequest):
         raise HTTPException(status_code=400, detail="该邮箱已注册")
 
     password_hash = hash_password(password)
+    user_id: int | None = None
     try:
         with get_db_connection() as conn:
-            cursor = conn.execute(
-                "INSERT INTO users (email, username, password_hash) VALUES (?, ?, ?)",
-                (email, username, password_hash),
-            )
+            if _use_postgres():
+                row = _db_execute(
+                    conn,
+                    "INSERT INTO users (email, username, password_hash) VALUES (?, ?, ?) RETURNING id",
+                    (email, username, password_hash),
+                ).fetchone()
+                user_id = int(row["id"]) if row else None
+            else:
+                cursor = _db_execute(
+                    conn,
+                    "INSERT INTO users (email, username, password_hash) VALUES (?, ?, ?)",
+                    (email, username, password_hash),
+                )
+                user_id = cursor.lastrowid
             conn.commit()
-            user_id = cursor.lastrowid
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="该邮箱已注册") from None
+    except Exception as e:
+        if _is_unique_violation(e):
+            raise HTTPException(status_code=400, detail="该邮箱已注册") from None
+        raise
 
     if user_id is None:
         raise HTTPException(status_code=500, detail="注册失败，请稍后重试")
@@ -1517,7 +1873,8 @@ def api_user_history(authorization: str | None = Header(default=None)):
     """返回当前登录用户的检索记录，按时间倒序。"""
     user_id = _require_user_id_from_header(authorization)
     with get_db_connection() as conn:
-        rows = conn.execute(
+        rows = _db_execute(
+            conn,
             """
             SELECT id, interest_desc, keywords, simple_terms, time_range,
                    journals, summary, created_at
@@ -1583,15 +1940,27 @@ def _resolve_api_key(client_api_key: str) -> str:
     return client_api_key.strip()
 
 
+@app.get("/api/usage/remaining", response_model=UsageRemainingResponse)
+def api_usage_remaining(
+    session_id: str = "",
+    authorization: str | None = Header(default=None),
+):
+    """查询当前用户今日剩余搜索次数（不扣减配额）。"""
+    user_id = _optional_user_id_from_header(authorization)
+    snapshot = build_usage_snapshot(
+        user_id=user_id,
+        identifier=session_id,
+    )
+    return UsageRemainingResponse(**snapshot)
+
+
 @app.post("/api/search", response_model=TaskStartResponse)
 def api_search(
     req: SearchRequest,
+    request: Request,
     authorization: str | None = Header(default=None),
 ):
     """创建异步检索任务，立即返回 task_id。"""
-    effective_api_key = _resolve_api_key(req.api_key)
-    user_id = _optional_user_id_from_header(authorization)
-    # 已登录用户：流水线成功后在后台线程写入 search_history
     if not req.interest or not req.interest.strip():
         raise HTTPException(status_code=400, detail="请提供个人兴趣描述")
     if req.time_range not in TIME_RANGE_OPTIONS:
@@ -1600,12 +1969,32 @@ def api_search(
             detail=f"无效的时间范围，可选: {', '.join(TIME_RANGE_OPTIONS)}",
         )
 
+    user_id = _optional_user_id_from_header(authorization)
+    if user_id is not None:
+        if not consume_user_usage(user_id):
+            raise HTTPException(
+                status_code=429,
+                detail="您今日的搜索次数已用完（20次/天），请明天再来。",
+            )
+    else:
+        client_host = request.client.host if request.client else None
+        identifier = _resolve_anonymous_identifier(req.session_id, client_host)
+        if not consume_anonymous_usage(identifier):
+            raise HTTPException(
+                status_code=429,
+                detail="免费用户每日可搜索3次，您今日的次数已用完。登录后每天可搜索20次。",
+            )
+
+    effective_api_key = _resolve_api_key(req.api_key)
+    # 已登录用户：流水线成功后在后台线程写入 search_history
+
     task_id = str(uuid.uuid4())
     with task_lock:
         task_status[task_id] = {
             "step": 0,
             "message": "任务已创建，等待执行...",
             "done": False,
+            "cancelled": False,
             "result": None,
             "error": None,
         }
@@ -1620,6 +2009,17 @@ def api_search(
     return TaskStartResponse(task_id=task_id)
 
 
+@app.post("/api/search/cancel")
+def api_search_cancel(task_id: str = Query(..., description="要取消的任务 ID")):
+    """取消进行中的搜索任务（关闭弹窗或刷新页面时调用）。"""
+    if not request_cancel_task(task_id):
+        with task_lock:
+            if task_id not in task_status:
+                raise HTTPException(status_code=404, detail="任务不存在或已过期")
+        return {"ok": True, "message": "任务已结束"}
+    return {"ok": True, "message": "已请求取消"}
+
+
 @app.get("/api/search/status", response_model=TaskStatusResponse)
 def api_search_status(task_id: str):
     """查询异步任务进度与结果。"""
@@ -1632,6 +2032,7 @@ def api_search_status(task_id: str):
         step=task.get("step", 0),
         message=task.get("message", ""),
         done=task.get("done", False),
+        cancelled=bool(task.get("cancelled")),
         result=task.get("result"),
         error=task.get("error"),
     )

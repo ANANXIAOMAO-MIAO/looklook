@@ -52,6 +52,10 @@ MAX_SELECTED_PAPERS = 10
 RELEVANCE_THRESHOLD = 0.55
 MAX_RETRIES = 3
 RETRY_INTERVAL = 2
+JSON_MAX_TOKENS = 4096
+P3_ENRICH_MAX_TOKENS = 8192
+BATCH_SIZE_ENRICH = 3
+ENRICH_FAILED_TITLE_CN = "（中文标题生成失败，请见上方英文标题）"
 
 TIME_RANGE_OPTIONS = ["一月内", "半年内", "一年内", "三年内", "五年内"]
 
@@ -524,6 +528,7 @@ def call_deepseek(
     *,
     json_mode: bool = True,
     temperature: float = 0.3,
+    max_tokens: int | None = None,
 ) -> str:
     """调用 DeepSeek Chat API，带重试与错误处理。"""
     headers = {
@@ -535,6 +540,8 @@ def call_deepseek(
         "messages": messages,
         "temperature": temperature,
     }
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     if json_mode:
         body["response_format"] = {"type": "json_object"}
 
@@ -562,7 +569,12 @@ def call_deepseek(
     raise RuntimeError(f"DeepSeek API 调用失败（已重试 {MAX_RETRIES} 次）: {last_error}")
 
 
-def parse_json_response(content: str) -> Any:
+def parse_json_response(
+    content: str,
+    *,
+    stage: str = "",
+    context: str = "",
+) -> Any:
     """
     安全解析 AI 返回的 JSON。
     只负责：清理 markdown 标记 → json.loads → 返回原始解析结果。
@@ -585,7 +597,12 @@ def parse_json_response(content: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        print(f"[JSON解析失败] 原始返回前200字符: {content[:200]}")
+        stage_part = f" stage={stage}" if stage else ""
+        ctx_part = f" {context}" if context else ""
+        print(
+            f"[JSON解析失败]{stage_part}{ctx_part} len={len(content)} "
+            f"原始返回前200字符: {content[:200]}"
+        )
         return {}
 
 
@@ -703,8 +720,9 @@ def expand_keywords(
         api_key,
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         json_mode=True,
+        max_tokens=JSON_MAX_TOKENS,
     )
-    data = parse_json_response(content)
+    data = parse_json_response(content, stage="P0")
     if not isinstance(data, dict):
         data = {}
 
@@ -980,8 +998,9 @@ def filter_papers_batch(
         api_key,
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         json_mode=True,
+        max_tokens=JSON_MAX_TOKENS,
     )
-    parsed = parse_json_response(content)
+    parsed = parse_json_response(content, stage="P2", context=f"batch={batch_num}")
     results = _extract_results_list(parsed)
 
     kept: list[dict] = []
@@ -1015,15 +1034,61 @@ def filter_papers_batch(
     return kept
 
 
-def enrich_papers_batch(
+def _paper_enrich_ok(paper: dict) -> bool:
+    """判断 P3 中文材料是否生成完整。"""
+    title_cn = str(paper.get("title_cn") or "").strip()
+    if not title_cn or title_cn == ENRICH_FAILED_TITLE_CN:
+        return False
+    if title_cn == str(paper.get("title") or "").strip():
+        return False
+    summary = str(paper.get("one_liner") or paper.get("summary_cn") or "").strip()
+    return bool(summary)
+
+
+def _apply_enrich_info(paper: dict, info: dict) -> dict:
+    """将单篇 AI  enrich 结果合并进论文字典。"""
+    out = dict(paper)
+    title_cn = str(info.get("title_cn") or "").strip()
+    if title_cn and title_cn != str(paper.get("title") or "").strip():
+        out["title_cn"] = title_cn
+    else:
+        out["title_cn"] = ENRICH_FAILED_TITLE_CN
+
+    summary_cn = str(info.get("summary_cn") or info.get("one_liner") or "").strip()
+    out["summary_cn"] = summary_cn
+    out["one_liner"] = summary_cn
+
+    recommendation_text = str(info.get("recommendation_text", "") or "").strip()
+    if not recommendation_text:
+        rec_raw = info.get("recommendation")
+        if isinstance(rec_raw, dict):
+            if rec_raw.get("short"):
+                recommendation_text = str(rec_raw.get("short", "")).strip()
+            else:
+                parts = [
+                    str(rec_raw.get("usage", "") or "").strip(),
+                    str(rec_raw.get("evidence_level", "") or "").strip(),
+                    str(rec_raw.get("highlight", "") or "").strip(),
+                ]
+                recommendation_text = "，".join(part for part in parts if part)
+        if not recommendation_text:
+            recommendation_text = str(info.get("recommendation_reason", "") or "").strip()
+    out["recommendation_text"] = recommendation_text
+    out["highlights"] = str(info.get("highlights", "") or "").strip()
+    out["limitations"] = str(info.get("limitations", "") or "").strip()
+    return out
+
+
+def _enrich_papers_batch_once(
     api_key: str,
     batch: list[dict],
     interest: str,
     *,
     core_concepts: str = "",
     intent_type: str = "exploration",
+    log_context: str = "",
 ) -> list[dict]:
-    """P3：生成中文标题、通俗摘要与深度点评（相关度分数由 P2 提供，不在此覆盖）。"""
+    """P3 单次 API 调用：生成中文标题、通俗摘要与深度点评。"""
     papers_for_ai = []
     for i, p in enumerate(batch):
         papers_for_ai.append(
@@ -1044,6 +1109,7 @@ def enrich_papers_batch(
         "专业但可读，80～150 字，一段完成，不要分点，不要写「推荐理由」四字。\n"
         "4. 首次出现的英文术语附简短中文解释。\n"
         "5. highlights / limitations 各一句，基于摘要，不夸大。\n"
+        "6. results 数组必须包含与输入论文数量相同、id 从 0 连续递增的条目，不得遗漏。\n"
         "必须返回 JSON，仅返回 JSON。"
     )
     user_msg = f"""用户兴趣：{interest}
@@ -1072,8 +1138,9 @@ def enrich_papers_batch(
         api_key,
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         json_mode=True,
+        max_tokens=P3_ENRICH_MAX_TOKENS,
     )
-    parsed = parse_json_response(content)
+    parsed = parse_json_response(content, stage="P3", context=log_context)
     results = _extract_results_list(parsed)
 
     enrich_map: dict[int, dict] = {}
@@ -1088,36 +1155,92 @@ def enrich_papers_batch(
         except (TypeError, ValueError):
             continue
 
-    enriched = []
+    if len(enrich_map) < len(batch):
+        print(
+            f"[P3] {log_context} 返回条数不足: 期望 {len(batch)} 篇, 实际 {len(enrich_map)} 篇"
+        )
+
+    enriched: list[dict] = []
     for i, p in enumerate(batch):
         info = enrich_map.get(i, {})
-        paper = dict(p)
+        if info:
+            enriched.append(_apply_enrich_info(p, info))
+        else:
+            failed = dict(p)
+            failed["title_cn"] = ENRICH_FAILED_TITLE_CN
+            failed["summary_cn"] = ""
+            failed["one_liner"] = ""
+            failed["recommendation_text"] = ""
+            failed["highlights"] = ""
+            failed["limitations"] = ""
+            enriched.append(failed)
+    return enriched
 
-        paper["title_cn"] = info.get("title_cn") or p.get("title", "")
-        summary_cn = info.get("summary_cn") or info.get("one_liner", "")
-        paper["summary_cn"] = summary_cn
-        paper["one_liner"] = summary_cn
 
-        recommendation_text = str(info.get("recommendation_text", "") or "").strip()
-        if not recommendation_text:
-            rec_raw = info.get("recommendation")
-            if isinstance(rec_raw, dict):
-                if rec_raw.get("short"):
-                    recommendation_text = str(rec_raw.get("short", "")).strip()
-                else:
-                    parts = [
-                        str(rec_raw.get("usage", "") or "").strip(),
-                        str(rec_raw.get("evidence_level", "") or "").strip(),
-                        str(rec_raw.get("highlight", "") or "").strip(),
-                    ]
-                    recommendation_text = "，".join(part for part in parts if part)
-            if not recommendation_text:
-                recommendation_text = str(info.get("recommendation_reason", "") or "").strip()
-        paper["recommendation_text"] = recommendation_text
-        paper["highlights"] = str(info.get("highlights", "") or "").strip()
-        paper["limitations"] = str(info.get("limitations", "") or "").strip()
+def enrich_papers_batch(
+    api_key: str,
+    batch: list[dict],
+    interest: str,
+    *,
+    core_concepts: str = "",
+    intent_type: str = "exploration",
+    batch_index: int = 0,
+    total_batches: int = 0,
+) -> list[dict]:
+    """P3：生成中文材料；解析失败或缺篇时整批重试，仍失败则单篇重试。"""
+    if not batch:
+        return []
 
-        enriched.append(paper)
+    batch_label = (
+        f"batch={batch_index}/{total_batches} size={len(batch)}"
+        if batch_index and total_batches
+        else f"size={len(batch)}"
+    )
+    enriched = _enrich_papers_batch_once(
+        api_key,
+        batch,
+        interest,
+        core_concepts=core_concepts,
+        intent_type=intent_type,
+        log_context=batch_label,
+    )
+
+    missing = [i for i, p in enumerate(enriched) if not _paper_enrich_ok(p)]
+    if not missing:
+        return enriched
+
+    if len(batch) > 1:
+        print(f"[P3] {batch_label} 有 {len(missing)} 篇不完整，整批重试...")
+        retry = _enrich_papers_batch_once(
+            api_key,
+            batch,
+            interest,
+            core_concepts=core_concepts,
+            intent_type=intent_type,
+            log_context=f"{batch_label} retry",
+        )
+        for i in missing:
+            if _paper_enrich_ok(retry[i]):
+                enriched[i] = retry[i]
+        missing = [i for i, p in enumerate(enriched) if not _paper_enrich_ok(p)]
+
+    for i in missing:
+        print(f"[P3] {batch_label} 单篇重试 index={i} title={batch[i].get('title', '')[:60]}")
+        single = _enrich_papers_batch_once(
+            api_key,
+            [batch[i]],
+            interest,
+            core_concepts=core_concepts,
+            intent_type=intent_type,
+            log_context=f"{batch_label} single id={i}",
+        )
+        if _paper_enrich_ok(single[0]):
+            enriched[i] = single[0]
+
+    still_missing = [i for i, p in enumerate(enriched) if not _paper_enrich_ok(p)]
+    if still_missing:
+        print(f"[P3] {batch_label} 仍有 {len(still_missing)} 篇未能生成中文材料")
+
     return enriched
 
 
@@ -1284,8 +1407,9 @@ def generate_review(
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         json_mode=True,
         temperature=0.3,
+        max_tokens=JSON_MAX_TOKENS,
     )
-    data = parse_json_response(content)
+    data = parse_json_response(content, stage="P5-review")
     if isinstance(data, dict):
         overview = safe_get_json_field(data, "overview", default="", expected_type=str) or ""
         themes = safe_get_json_field(data, "themes", default="", expected_type=str) or ""
@@ -1535,7 +1659,7 @@ def run_pipeline(
 
     report(4, " 正在生成中文摘要与深度点评...")
     enriched_all: list[dict] = []
-    batch_size_enrich = 5
+    batch_size_enrich = BATCH_SIZE_ENRICH
     total_enrich = (len(candidate_papers) + batch_size_enrich - 1) // batch_size_enrich
     for b in range(total_enrich):
         ensure_not_cancelled()
@@ -1546,6 +1670,8 @@ def run_pipeline(
             interest,
             core_concepts=core_concepts,
             intent_type=intent_type,
+            batch_index=b + 1,
+            total_batches=total_enrich,
         )
         enriched_all.extend(enriched)
         report(

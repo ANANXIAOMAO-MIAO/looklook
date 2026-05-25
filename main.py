@@ -41,8 +41,9 @@ DEEPSEEK_MODEL = "deepseek-chat"
 OPENALEX_SEARCH_URL = "https://api.openalex.org/works"
 OPENALEX_PER_PAGE = 200
 OPENALEX_SLEEP = 0.1
-MAX_FETCH_PAPERS = 100
+MAX_FETCH_PAPERS = 200
 MAX_SELECTED_PAPERS = 10
+RELEVANCE_THRESHOLD = 0.55
 MAX_RETRIES = 3
 RETRY_INTERVAL = 2
 
@@ -647,6 +648,22 @@ def fetch_papers_openalex(
     return papers
 
 
+def _tier_from_score(score: float) -> str:
+    if score >= 0.75:
+        return "high"
+    if score >= RELEVANCE_THRESHOLD:
+        return "medium"
+    return "low"
+
+
+def _intent_type_cn(intent_type: str) -> str:
+    return {
+        "content_creation": "内容创作",
+        "report_support": "报告/课题支撑",
+        "exploration": "领域探索",
+    }.get(intent_type, "领域探索")
+
+
 def filter_papers_batch(
     api_key: str,
     batch: list[dict],
@@ -655,8 +672,9 @@ def filter_papers_batch(
     *,
     core_concepts: str = "",
     scoring_guide: str = "",
+    intent_type: str = "exploration",
 ) -> list[dict]:
-    """AI 智能筛选一批论文。"""
+    """P2：评估相关度分数与分级，保留 score >= RELEVANCE_THRESHOLD 的论文。"""
     lines = []
     for i, p in enumerate(batch):
         abstract = p.get("abstract") or "（无摘要）"
@@ -670,19 +688,30 @@ def filter_papers_batch(
         )
 
     system_msg = (
-        "你是学术论文筛选助手。根据用户兴趣判断每篇论文是否高度相关。"
-        "必须返回 JSON 对象，包含 results 数组。"
+        "你是学术论文筛选助手。根据用户兴趣与评分指南，阅读每篇论文的标题与摘要，"
+        "给出 0～1 的相关度分数与分级。\n"
+        "规则：\n"
+        "1. 只依据提供的标题与摘要判断，禁止编造未出现的信息。\n"
+        "2. 严格按 scoring_guide 理解「在该用户意图下何谓高分」。\n"
+        "3. relevance_score：1.0=高度契合；0.55=勉强相关下限；<0.55=应淘汰。\n"
+        "4. tier：high(≥0.75)、medium(0.55～0.74)、low(<0.55)。\n"
+        "5. relevant：relevance_score ≥ 0.55 时为 true，否则 false。\n"
+        "必须返回 JSON：{\"results\": [{\"index\": 0, \"relevance_score\": 0.82, "
+        "\"tier\": \"high\", \"relevant\": true}, ...]}。仅返回 JSON，不要其他文字。"
     )
     user_msg = f"""用户个人兴趣描述：
-{interest}{context_block}
+{interest}
+用户产出意图：{intent_type}（{_intent_type_cn(intent_type)}）{context_block}
+
+请对下列论文逐篇评分。边界篇宁可给低分，不要把明显无关或仅关键词沾边的论文标为 medium/high。
 
 以下论文（批次内序号从 0 开始）：
 {papers_text}
 
 请返回 JSON：
-{{"results": [{{"index": 0, "relevant": true}}, {{"index": 1, "relevant": false}}, ...]}}
+{{"results": [{{"index": 0, "relevance_score": 0.82, "tier": "high", "relevant": true}}, ...]}}
 
-对每篇论文判断 relevant（true/false）。仅返回 JSON。"""
+仅返回 JSON。"""
 
     content = call_deepseek(
         api_key,
@@ -692,12 +721,35 @@ def filter_papers_batch(
     parsed = parse_json_response(content)
     results = _extract_results_list(parsed)
 
-    relevant_indices = set()
+    kept: list[dict] = []
     for item in results:
-        if isinstance(item, dict) and item.get("relevant") is True:
-            relevant_indices.add(item.get("index", -1))
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("index", -1))
+        except (TypeError, ValueError):
+            continue
+        if idx < 0 or idx >= len(batch):
+            continue
+        try:
+            score = float(item.get("relevance_score", 0))
+        except (TypeError, ValueError):
+            if item.get("relevant") is True:
+                score = RELEVANCE_THRESHOLD
+            else:
+                score = 0.0
+        score = max(0.0, min(1.0, score))
+        if score < RELEVANCE_THRESHOLD:
+            continue
+        tier = str(item.get("tier") or _tier_from_score(score)).strip().lower()
+        if tier not in ("high", "medium", "low"):
+            tier = _tier_from_score(score)
+        paper = dict(batch[idx])
+        paper["relevance_score"] = round(score, 4)
+        paper["relevance_tier"] = tier
+        kept.append(paper)
 
-    return [batch[i] for i in range(len(batch)) if i in relevant_indices]
+    return kept
 
 
 def enrich_papers_batch(
@@ -708,7 +760,7 @@ def enrich_papers_batch(
     core_concepts: str = "",
     intent_type: str = "exploration",
 ) -> list[dict]:
-    """P3：为一批论文生成中文信息、0-1 相关度得分与自然段推荐理由。"""
+    """P3：生成中文标题、通俗摘要与深度点评（相关度分数由 P2 提供，不在此覆盖）。"""
     papers_for_ai = []
     for i, p in enumerate(batch):
         papers_for_ai.append(
@@ -721,16 +773,19 @@ def enrich_papers_batch(
     papers_json = json.dumps(papers_for_ai, ensure_ascii=False, indent=2)
 
     system_msg = (
-        "你是学术论文分析助手，角色为「私人研究助理」。"
-        "你的任务是为每篇论文生成中文翻译、一句话总结，"
-        "根据用户需求给出 0-1 之间的相关度得分，"
-        "并写出一段通顺的中文推荐理由（recommendation_text）。"
-        "推荐理由应把使用场景、证据类型、最值得引用的数据或结论融入一段自然语言，"
-        "不要分点罗列，不要包含「推荐理由」四字，长度约 40-80 字。必须返回 JSON。"
+        "你是学术论文分析助手。用户已通过相关度筛选，你的任务是为每篇论文撰写可读的中文材料。\n"
+        "要求：\n"
+        "1. 只根据提供的标题与摘要撰写，禁止编造作者、数据、结论或实验结果。\n"
+        "2. summary_cn：2～3 句，说明研究问题、方法、主要发现；避免「本文提出了一种…」式套话。\n"
+        "3. recommendation_text：像懂行的朋友做深度点评——说明研究价值、对用户的用处、值得关注的证据；"
+        "专业但可读，80～150 字，一段完成，不要分点，不要写「推荐理由」四字。\n"
+        "4. 首次出现的英文术语附简短中文解释。\n"
+        "5. highlights / limitations 各一句，基于摘要，不夸大。\n"
+        "必须返回 JSON，仅返回 JSON。"
     )
     user_msg = f"""用户兴趣：{interest}
 用户核心关注点：{core_concepts}
-用户产出意图：{intent_type}（content_creation=内容创作，report_support=报告支撑，exploration=领域探索）
+用户产出意图：{intent_type}（{_intent_type_cn(intent_type)}）
 
 请对以下论文逐一处理，返回 JSON：
 {{
@@ -738,9 +793,10 @@ def enrich_papers_batch(
     {{
       "id": 0,
       "title_cn": "中文标题",
-      "summary_cn": "一句话中文总结（包含研究对象、方法、主要发现）",
-      "relevance_score": 0.85,
-      "recommendation_text": "这篇论文通过随机对照试验验证了饮食调整对超重猫的减重效果，可作为科普文章中科学减肥方法的数据支撑，其中报告的平均减重幅度达12%值得引用。"
+      "summary_cn": "2～3 句通俗总结",
+      "recommendation_text": "深度点评一段",
+      "highlights": "一句亮点",
+      "limitations": "一句不足"
     }}
   ]
 }}
@@ -774,12 +830,6 @@ def enrich_papers_batch(
         info = enrich_map.get(i, {})
         paper = dict(p)
 
-        try:
-            relevance = float(info.get("relevance_score", 0.5))
-        except (TypeError, ValueError):
-            relevance = 0.5
-        paper["relevance_score"] = max(0.0, min(1.0, relevance))
-
         paper["title_cn"] = info.get("title_cn") or p.get("title", "")
         summary_cn = info.get("summary_cn") or info.get("one_liner", "")
         paper["summary_cn"] = summary_cn
@@ -797,10 +847,12 @@ def enrich_papers_batch(
                         str(rec_raw.get("evidence_level", "") or "").strip(),
                         str(rec_raw.get("highlight", "") or "").strip(),
                     ]
-                    recommendation_text = "，".join(p for p in parts if p)
+                    recommendation_text = "，".join(part for part in parts if part)
             if not recommendation_text:
                 recommendation_text = str(info.get("recommendation_reason", "") or "").strip()
         paper["recommendation_text"] = recommendation_text
+        paper["highlights"] = str(info.get("highlights", "") or "").strip()
+        paper["limitations"] = str(info.get("limitations", "") or "").strip()
 
         enriched.append(paper)
     return enriched
@@ -809,8 +861,7 @@ def enrich_papers_batch(
 def compute_scores_and_select(
     enriched_papers: list[dict],
 ) -> tuple[list[dict], list[dict]]:
-    """归一化引用得分，计算推荐指数，排序并选取精选论文。"""
-    # 归一化引用次数得分（OpenAlex cited_by_count → 内部字段 citationCount）
+    """计算推荐指数，返回 (推荐阅读 Top10, 全部相关文献按推荐指数降序)。"""
     citations = [p.get("citationCount", 0) or 0 for p in enriched_papers]
     min_cite = min(citations) if citations else 0
     max_cite = max(citations) if citations else 1
@@ -822,7 +873,6 @@ def compute_scores_and_select(
             norm_cite = 1.0
 
         relevance = float(p.get("relevance_score", 0.5))
-        # 推荐指数 = (相关度得分 × 0.5 + 归一化引用次数得分 × 0.5) × 10
         rec_index = (relevance * 0.5 + norm_cite * 0.5) * 10
         p["normalized_citation_score"] = round(norm_cite, 4)
         p["recommendation_index"] = round(rec_index, 2)
@@ -833,102 +883,251 @@ def compute_scores_and_select(
         key=lambda x: x.get("recommendation_index", 0),
         reverse=True,
     )
-    selected = sorted_papers[:MAX_SELECTED_PAPERS]
-    other = sorted_papers[MAX_SELECTED_PAPERS:]
-    return selected, other
+    recommended = sorted_papers[:MAX_SELECTED_PAPERS]
+    return recommended, sorted_papers
 
 
-def generate_review(api_key: str, selected_papers: list[dict]) -> str:
-    """生成中文综述。"""
+_REVIEW_CONCLUSION_PREFIX_RE = re.compile(r"^\d+[\.\、\)]\s*")
+
+
+def _normalize_review_overview(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if not text.startswith("本期研究围绕"):
+        text = text.lstrip("。.，,")
+        text = f"本期研究围绕{text}"
+    return text
+
+
+def _normalize_review_themes(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if not text.startswith("覆盖"):
+        text = text.lstrip("。.，,")
+        text = f"覆盖{text}"
+    return text
+
+
+def _normalize_review_conclusions(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    items: list[str] = []
+    for item in raw[:5]:
+        line = str(item).strip()
+        if not line:
+            continue
+        line = _REVIEW_CONCLUSION_PREFIX_RE.sub("", line)
+        if line:
+            items.append(line)
+    return items
+
+
+def assemble_review_text(overview: str, themes: str, conclusions: list[str]) -> str:
+    """将结构化字段拼成固定三段格式的综述正文。"""
+    overview = _normalize_review_overview(overview)
+    themes = _normalize_review_themes(themes)
+
+    numbered: list[str] = []
+    for idx, line in enumerate(conclusions, 1):
+        numbered.append(f"{idx}. {line}")
+
+    sections: list[str] = []
+    if overview:
+        sections.append(overview)
+    if themes:
+        sections.append(themes)
+    if numbered:
+        sections.append("值得关注的结论有：\n" + "\n".join(numbered))
+
+    return "\n\n".join(sections).strip()
+
+
+def format_review_text(review_text: str) -> str:
+    """兼容旧版纯文本综述的后处理（JSON 解析失败时兜底）。"""
+    review_text = (review_text or "").strip()
+    if not review_text:
+        return review_text
+
+    pos = review_text.find("本期研究围绕")
+    if pos > 0:
+        review_text = review_text[pos:].lstrip()
+
+    if "覆盖" in review_text:
+        review_text = re.sub(r"(?<!\n)覆盖", "\n\n覆盖", review_text, count=1)
+    if "值得关注的结论有：" in review_text:
+        review_text = re.sub(
+            r"(?<!\n)值得关注的结论有：",
+            "\n\n值得关注的结论有：",
+            review_text,
+            count=1,
+        )
+
+    review_text = re.sub(r"(?<!\n)(\d+\.\s)", r"\n\1", review_text)
+
+    while "\n\n\n" in review_text:
+        review_text = review_text.replace("\n\n\n", "\n\n")
+
+    return review_text.strip()
+
+
+def generate_review(
+    api_key: str,
+    selected_papers: list[dict],
+    *,
+    intent_type: str = "exploration",
+) -> str:
+    """生成中文综述（仅基于推荐阅读 Top10）。"""
     lines = []
     for p in selected_papers:
         lines.append(f"- {p.get('title_cn', p['title'])}：{p.get('one_liner', '')}")
     summary_input = "\n".join(lines)
 
-    system_msg = "你是学术综述撰写专家，用流畅中文撰写文献速递综述。"
-    user_msg = f"""根据以下精选论文的中文标题与一句话总结，撰写中文文献速递综述。
-直接输出综述正文，不要额外标题。综述必须包含以下三部分：
+    intent_hint = ""
+    if intent_type == "report_support":
+        intent_hint = (
+            "用户意图为报告/课题支撑：首段概括可适度点明这些研究对用户问题的证据价值，"
+            "但仍须基于下列论文信息，不要编造未出现的结论。"
+        )
+    elif intent_type == "content_creation":
+        intent_hint = (
+            "用户意图为内容创作：首段与结论可侧重哪些发现适合科普转述、哪些证据有传播价值。"
+        )
+    else:
+        intent_hint = "用户意图为领域探索：首段与结论侧重研究趋势与主题分布。"
 
-1. 以「本期研究围绕……」开头，概括本期研究方向
-2. 以「覆盖……方向」描述主要主题分布
-3. 以「值得关注的结论有：」引出结论，条数由你根据论文内容自行决定，最多不超过 5 条，每条以数字序号开头（1. 2. 3. ...）
+    system_msg = (
+        "你是学术综述撰写专家，用流畅、通俗的中文撰写文献速递综述。"
+        "只根据提供的论文标题与总结撰写，禁止编造未出现在输入中的数据、作者或结论。"
+        "避免「本文提出…」「综上所述」等套话；写给感兴趣但非该领域专家的读者。"
+        "你必须只返回一个合法 JSON 对象，不要输出任何其他文字。"
+    )
+    user_msg = f"""根据以下推荐阅读论文的中文标题与总结，撰写中文文献速递综述。
+{intent_hint}
 
-总字数 200-400 字，语言流畅自然。
+请返回 JSON 对象（仅 JSON），包含以下字段：
+- overview: 字符串。以「本期研究围绕」开头，概括本期研究方向（仅这一段，不要写主题分布与结论）。
+- themes: 字符串。以「覆盖」开头，描述主要主题分布（仅这一段）。
+- conclusions: 字符串数组。1～5 条结论要点，每条为完整句子，不要带序号前缀。
+
+三部分合计 200-400 字，语言流畅自然。
 
 论文信息：
 {summary_input}"""
 
-    return call_deepseek(
+    content = call_deepseek(
         api_key,
         [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
-        json_mode=False,
-        temperature=0.5,
+        json_mode=True,
+        temperature=0.3,
     )
+    data = parse_json_response(content)
+    if isinstance(data, dict):
+        overview = safe_get_json_field(data, "overview", default="", expected_type=str) or ""
+        themes = safe_get_json_field(data, "themes", default="", expected_type=str) or ""
+        conclusions = _normalize_review_conclusions(
+            safe_get_json_field(data, "conclusions", default=[], expected_type=list)
+        )
+        assembled = assemble_review_text(overview, themes, conclusions)
+        if assembled:
+            return assembled
+
+    return format_review_text(content)
 
 
-def build_excel(review: str, selected: list[dict], other: list[dict]) -> bytes:
-    """生成三 Sheet 的 Excel 文件。"""
+PAPER_SHEET_HEADERS = [
+    "推荐指数",
+    "相关度得分（P2）",
+    "相关度分级",
+    "归一化引用得分",
+    "英文标题",
+    "中文标题",
+    "作者",
+    "期刊",
+    "发表年份",
+    "引用次数",
+    "英文摘要",
+    "一句话总结（中文）",
+    "深度点评",
+    "亮点",
+    "不足",
+]
+PAPER_SHEET_COL_WIDTHS = [10, 10, 10, 12, 30, 30, 20, 20, 8, 8, 50, 40, 50, 28, 28]
+
+
+def _write_paper_sheet_rows(
+    ws: Any,
+    papers: list[dict],
+    *,
+    bold: Font,
+    wrap: Alignment,
+    start_row: int = 2,
+) -> None:
+    for row_idx, p in enumerate(papers, start_row):
+        ws.cell(row=row_idx, column=1, value=p.get("recommendation_index", p.get("score", 0)))
+        ws.cell(row=row_idx, column=2, value=p.get("relevance_score", ""))
+        ws.cell(row=row_idx, column=3, value=p.get("relevance_tier", ""))
+        ws.cell(row=row_idx, column=4, value=p.get("normalized_citation_score", ""))
+        ws.cell(row=row_idx, column=5, value=p.get("title", ""))
+        ws.cell(row=row_idx, column=6, value=p.get("title_cn", ""))
+        ws.cell(row=row_idx, column=7, value=p.get("authors", ""))
+        ws.cell(row=row_idx, column=8, value=p.get("journal", ""))
+        ws.cell(row=row_idx, column=9, value=p.get("year", ""))
+        ws.cell(row=row_idx, column=10, value=p.get("citationCount", 0))
+        c10 = ws.cell(row=row_idx, column=11, value=p.get("abstract", ""))
+        c10.alignment = wrap
+        c11 = ws.cell(row=row_idx, column=12, value=p.get("one_liner", ""))
+        c11.alignment = wrap
+        c12 = ws.cell(row=row_idx, column=13, value=p.get("recommendation_text", ""))
+        c12.alignment = wrap
+        c13 = ws.cell(row=row_idx, column=14, value=p.get("highlights", ""))
+        c13.alignment = wrap
+        c14 = ws.cell(row=row_idx, column=15, value=p.get("limitations", ""))
+        c14.alignment = wrap
+
+
+def _init_paper_sheet(ws: Any, *, bold: Font) -> None:
+    for col, (h, w) in enumerate(zip(PAPER_SHEET_HEADERS, PAPER_SHEET_COL_WIDTHS), 1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.font = bold
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+
+def build_excel(
+    review: str,
+    recommended: list[dict],
+    all_relevant: list[dict],
+) -> bytes:
+    """生成三 Sheet：文献速递 / 推荐阅读 / 全部相关论文。"""
     wb = Workbook()
     bold = Font(bold=True)
     wrap = Alignment(wrap_text=True, vertical="top")
+    last_col = get_column_letter(len(PAPER_SHEET_HEADERS))
 
     ws1 = wb.active
     ws1.title = "文献速递"
-    ws1.merge_cells("A1:L1")
+    ws1.merge_cells(f"A1:{last_col}1")
     cell = ws1["A1"]
     cell.value = review
     cell.alignment = wrap
     ws1.row_dimensions[1].height = 120
-    ws1["A3"] = f"以上综述基于精选的 {len(selected)} 篇论文，详情见 Sheet2。"
+    ws1["A3"] = (
+        f"以上综述基于推荐阅读的 {len(recommended)} 篇论文；"
+        f"共 {len(all_relevant)} 篇相关论文见「全部相关论文」，推荐阅读见「推荐阅读」。"
+    )
 
-    ws2 = wb.create_sheet("精选论文数据")
-    headers2 = [
-        "推荐指数",
-        "相关度得分",
-        "归一化引用得分",
-        "英文标题",
-        "中文标题",
-        "作者",
-        "期刊",
-        "发表年份",
-        "引用次数",
-        "英文摘要",
-        "一句话总结（中文）",
-        "推荐理由",
-    ]
-    col_widths2 = [10, 10, 12, 30, 30, 20, 20, 8, 8, 50, 40, 50]
-    for col, (h, w) in enumerate(zip(headers2, col_widths2), 1):
-        c = ws2.cell(row=1, column=col, value=h)
-        c.font = bold
-        ws2.column_dimensions[get_column_letter(col)].width = w
+    ws2 = wb.create_sheet("推荐阅读")
+    _init_paper_sheet(ws2, bold=bold)
+    if recommended:
+        _write_paper_sheet_rows(ws2, recommended, bold=bold, wrap=wrap)
+    else:
+        ws2["A2"] = "无"
 
-    for row_idx, p in enumerate(selected, 2):
-        ws2.cell(row=row_idx, column=1, value=p.get("recommendation_index", p.get("score", 0)))
-        ws2.cell(row=row_idx, column=2, value=p.get("relevance_score", ""))
-        ws2.cell(row=row_idx, column=3, value=p.get("normalized_citation_score", ""))
-        ws2.cell(row=row_idx, column=4, value=p.get("title", ""))
-        ws2.cell(row=row_idx, column=5, value=p.get("title_cn", ""))
-        ws2.cell(row=row_idx, column=6, value=p.get("authors", ""))
-        ws2.cell(row=row_idx, column=7, value=p.get("journal", ""))
-        ws2.cell(row=row_idx, column=8, value=p.get("year", ""))
-        ws2.cell(row=row_idx, column=9, value=p.get("citationCount", 0))
-        c10 = ws2.cell(row=row_idx, column=10, value=p.get("abstract", ""))
-        c10.alignment = wrap
-        c11 = ws2.cell(row=row_idx, column=11, value=p.get("one_liner", ""))
-        c11.alignment = wrap
-        c12 = ws2.cell(row=row_idx, column=12, value=p.get("recommendation_text", ""))
-        c12.alignment = wrap
-
-    ws3 = wb.create_sheet("其他相关论文")
-    for col, h in enumerate(["英文标题", "中文标题"], 1):
-        c = ws3.cell(row=1, column=col, value=h)
-        c.font = bold
-        ws3.column_dimensions[get_column_letter(col)].width = 40
-
-    if other:
-        for row_idx, p in enumerate(other, 2):
-            ws3.cell(row=row_idx, column=1, value=p.get("title", ""))
-            ws3.cell(row=row_idx, column=2, value=p.get("title_cn", ""))
+    ws3 = wb.create_sheet("全部相关论文")
+    _init_paper_sheet(ws3, bold=bold)
+    if all_relevant:
+        _write_paper_sheet_rows(ws3, all_relevant, bold=bold, wrap=wrap)
     else:
         ws3["A2"] = "无"
 
@@ -954,6 +1153,9 @@ def format_paper_for_api(p: dict) -> dict:
         "normalized_citation_score": p.get("normalized_citation_score", 0),
         "recommendation_index": recommendation_index,
         "recommendation_text": p.get("recommendation_text", ""),
+        "relevance_tier": p.get("relevance_tier", ""),
+        "highlights": p.get("highlights", ""),
+        "limitations": p.get("limitations", ""),
         "score": recommendation_index,
     }
 
@@ -1028,7 +1230,9 @@ def run_pipeline(
     if not raw_papers:
         raise ValueError("未找到符合日期或期刊条件的论文，请调整关键词或时间范围后重试。")
 
-    report(3, " AI 正在筛选相关论文...")
+    fetched_count = len(raw_papers)
+
+    report(3, " AI 正在评估相关度...")
     candidate_papers: list[dict] = []
     batch_size_filter = 10
     total_batches = (len(raw_papers) + batch_size_filter - 1) // batch_size_filter
@@ -1041,18 +1245,21 @@ def run_pipeline(
             b + 1,
             core_concepts=core_concepts,
             scoring_guide=scoring_guide,
+            intent_type=intent_type,
         )
         candidate_papers.extend(filtered)
         report(
             3,
-            f" AI 正在筛选相关论文...（第 {b + 1}/{total_batches} 批，已保留 {len(candidate_papers)} 篇）",
+            f" AI 正在评估相关度...（第 {b + 1}/{total_batches} 批，已保留 {len(candidate_papers)} 篇）",
         )
         time.sleep(0.5)
 
     if not candidate_papers:
         raise ValueError("未找到高度相关论文，请调整兴趣描述后重试。")
 
-    report(4, " 正在生成总结与评分...")
+    relevant_count = len(candidate_papers)
+
+    report(4, " 正在生成中文摘要与深度点评...")
     enriched_all: list[dict] = []
     batch_size_enrich = 5
     total_enrich = (len(candidate_papers) + batch_size_enrich - 1) // batch_size_enrich
@@ -1066,16 +1273,25 @@ def run_pipeline(
             intent_type=intent_type,
         )
         enriched_all.extend(enriched)
-        report(4, f" 正在生成总结与评分...（第 {b + 1}/{total_enrich} 批）")
+        report(
+            4,
+            f" 正在生成中文摘要与深度点评...（第 {b + 1}/{total_enrich} 批）",
+        )
         time.sleep(0.5)
 
-    selected_papers, other_papers = compute_scores_and_select(enriched_all)
+    recommended_papers, all_relevant_papers = compute_scores_and_select(enriched_all)
+    recommended_count = len(recommended_papers)
+    selection_ratio = (
+        round(recommended_count / relevant_count, 4) if relevant_count > 0 else 0.0
+    )
 
     report(5, " 正在生成综述...")
-    review = generate_review(api_key, selected_papers)
+    review = generate_review(
+        api_key, recommended_papers, intent_type=intent_type
+    )
 
     report(5, " 正在生成 Excel...")
-    excel_bytes = build_excel(review, selected_papers, other_papers)
+    excel_bytes = build_excel(review, recommended_papers, all_relevant_papers)
 
     journals_used: list[str] = []
     if journal_input.strip():
@@ -1085,8 +1301,13 @@ def run_pipeline(
 
     return {
         "summary": review,
-        "selected_papers": [format_paper_for_api(p) for p in selected_papers],
-        "other_papers_count": len(other_papers),
+        "selected_papers": [format_paper_for_api(p) for p in recommended_papers],
+        "search_stats": {
+            "fetched_count": fetched_count,
+            "relevant_count": relevant_count,
+            "recommended_count": recommended_count,
+            "selection_ratio": selection_ratio,
+        },
         "simple_terms": simple_terms_display,
         "journals_used": journals_used,
         "time_range": time_label,

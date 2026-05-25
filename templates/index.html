@@ -8,31 +8,48 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
 
     :root {
-      --gradient-main: linear-gradient(135deg, #DDB4F6, #8DD0FC);
-      --color-purple: #DDB4F6;
-      --color-blue: #8DD0FC;
-      --bg-base: #F7F8FC;
-      --card-bg: rgba(255, 255, 255, 0.7);
-      --text-primary: #2B2F42;
-      --text-secondary: #6B7280;
-      --border-color: #E5E7EB;
-      --shadow-card: 0 10px 40px rgba(0, 0, 0, 0.08);
-      --focus-glow: 0 0 0 3px rgba(141, 208, 252, 0.25);
+      --accent-purple: #B8A4E8;
+      --accent-blue: #7BB8E8;
+      --accent-deep: #5B4F8C;
+      --gradient-main: linear-gradient(135deg, #C4B0E8 0%, #8EC4EA 100%);
+      --gradient-brand: linear-gradient(135deg, #7B5CB0 0%, #6A7BC4 52%, #4A7AB8 100%);
+      --color-purple: var(--accent-purple);
+      --color-blue: var(--accent-blue);
+      --bg-base: #F4F6FA;
+      --bg-tint: #EEF1F8;
+      --card-bg: rgba(255, 255, 255, 0.62);
+      --card-bg-solid: rgba(255, 255, 255, 0.88);
+      --glass-border: rgba(255, 255, 255, 0.75);
+      --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+      --text-primary: #252A3A;
+      --text-secondary: #5C6478;
+      --text-muted: #8B93A8;
+      --border-color: rgba(91, 79, 140, 0.12);
+      --border-input: rgba(91, 79, 140, 0.18);
+      --shadow-card: 0 4px 6px rgba(75, 65, 120, 0.04), 0 16px 48px rgba(75, 100, 150, 0.1);
+      --shadow-hover: 0 8px 24px rgba(75, 90, 140, 0.14);
+      --focus-glow: 0 0 0 3px rgba(126, 184, 232, 0.28);
+      --radius-sm: 10px;
+      --radius-md: 16px;
+      --radius-lg: 22px;
+      --font-display: 'Plus Jakarta Sans', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      --font-body: 'Noto Sans SC', 'Plus Jakarta Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--font-body);
       font-weight: 400;
       color: var(--text-primary);
       background: var(--bg-base);
-      min-height: 100vh;
-      line-height: 1.6;
+      min-height: 100dvh;
+      line-height: 1.65;
       position: relative;
+      -webkit-font-smoothing: antialiased;
     }
 
     .bg-glow {
@@ -56,8 +73,8 @@
       height: min(440px, 58vh);
       background: radial-gradient(
         ellipse at center,
-        rgba(221, 180, 246, 0.45) 0%,
-        rgba(221, 180, 246, 0.22) 42%,
+        rgba(196, 176, 232, 0.38) 0%,
+        rgba(196, 176, 232, 0.14) 45%,
         transparent 72%
       );
     }
@@ -69,72 +86,93 @@
       height: min(420px, 55vh);
       background: radial-gradient(
         ellipse at center,
-        rgba(141, 208, 252, 0.42) 0%,
-        rgba(141, 208, 252, 0.18) 48%,
+        rgba(142, 196, 234, 0.34) 0%,
+        rgba(142, 196, 234, 0.12) 50%,
         transparent 75%
       );
+    }
+
+    .bg-noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.035;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
     }
 
     .page-wrap {
       position: relative;
       z-index: 1;
-      max-width: 900px;
+      max-width: 960px;
       margin: 0 auto;
-      padding: 90px 1.5rem 3rem;
+      padding: 96px 1.75rem 3.5rem;
     }
 
     .brand-title {
-      font-family: 'Fredoka', 'Quicksand', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+      font-family: var(--font-display);
       text-align: center;
-      font-size: clamp(48px, 7vw, 56px);
-      font-weight: 600;
-      background: linear-gradient(135deg, #C44AD0 0%, #8F6AD8 48%, #4A8AD4 100%);
+      font-size: clamp(2.5rem, 6.5vw, 3.25rem);
+      font-weight: 700;
+      background: var(--gradient-brand);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-      color: #8F6AD8;
+      color: #6A7BC4;
       margin-bottom: 0.5rem;
-      letter-spacing: 0.03em;
-      line-height: 1.15;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      text-wrap: balance;
     }
 
     .brand-subtitle {
       text-align: center;
-      font-size: 16px;
+      font-size: 15px;
+      font-weight: 400;
       color: var(--text-secondary);
-      margin-bottom: 2.5rem;
+      margin-bottom: 2.75rem;
+      max-width: 36em;
+      margin-left: auto;
+      margin-right: auto;
+      line-height: 1.7;
     }
 
     .card,
     .card-glass,
     .card-muted {
       background: var(--card-bg);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-radius: 20px;
-      box-shadow: var(--shadow-card);
-      border: 1px solid rgba(255, 255, 255, 0.65);
-      padding: 24px 28px;
-      margin-bottom: 1.25rem;
+      backdrop-filter: blur(24px) saturate(1.35);
+      -webkit-backdrop-filter: blur(24px) saturate(1.35);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-card), var(--glass-inner);
+      border: 1px solid var(--glass-border);
+      padding: 26px 30px;
+      margin-bottom: 1.35rem;
+      transition: box-shadow 0.25s ease, border-color 0.25s ease;
+    }
+
+    .card-muted {
+      background: rgba(255, 255, 255, 0.55);
     }
 
     @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
       .card,
       .card-glass,
       .card-muted {
-        background: rgba(255, 255, 255, 0.96);
+        background: var(--card-bg-solid);
       }
     }
 
     label {
       display: block;
-      font-size: 14px;
-      font-weight: 500;
+      font-size: 13px;
+      font-weight: 600;
       color: var(--text-primary);
       margin-bottom: 0.5rem;
+      letter-spacing: 0.01em;
     }
 
-    label .required { color: #EF4444; }
+    label .required { color: #C45C6A; }
 
     .card-glass label + textarea,
     .card-glass label + input,
@@ -160,15 +198,18 @@
     input[type="password"],
     select {
       width: 100%;
-      border-radius: 10px;
-      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-input);
       padding: 12px 14px;
       font-size: 14px;
       font-family: inherit;
-      background: #FFFFFF;
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       color: var(--text-primary);
-      transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
       margin-bottom: 1rem;
+      box-shadow: inset 0 1px 2px rgba(75, 65, 120, 0.04);
     }
 
     .card-glass textarea,
@@ -182,8 +223,8 @@
     select {
       appearance: none;
       -webkit-appearance: none;
-      background-color: #FFFFFF;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B7280' d='M2.5 4.5L6 8l3.5-3.5'/%3E%3C/svg%3E");
+      background-color: rgba(255, 255, 255, 0.72);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235C6478' d='M2.5 4.5L6 8l3.5-3.5'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: right 14px center;
       padding: 12px 40px 12px 14px;
@@ -196,8 +237,17 @@
     input:focus,
     select:focus {
       outline: none;
-      border-color: var(--color-blue);
-      box-shadow: var(--focus-glow);
+      border-color: var(--accent-blue);
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: var(--focus-glow), inset 0 1px 2px rgba(75, 65, 120, 0.04);
+    }
+
+    textarea:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    button:focus-visible {
+      outline: 2px solid var(--accent-blue);
+      outline-offset: 2px;
     }
 
     textarea:disabled,
@@ -230,7 +280,7 @@
       font-family: inherit;
     }
 
-    .advanced-toggle:hover { color: var(--color-blue); }
+    .advanced-toggle:hover { color: var(--accent-deep); }
 
     .advanced-panel {
       display: none;
@@ -262,38 +312,57 @@
     .btn-secondary {
       height: 44px;
       padding: 0 28px;
-      border-radius: 10px;
+      border-radius: var(--radius-sm);
       font-size: 15px;
-      font-weight: 500;
-      font-family: inherit;
+      font-weight: 600;
+      font-family: var(--font-display);
+      letter-spacing: 0.01em;
       cursor: pointer;
-      border: none;
-      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-      background: #250e2c;
+      border: 1px solid transparent;
+      transition: transform 0.22s ease, box-shadow 0.22s ease, background 0.22s ease, border-color 0.22s ease;
+      background: linear-gradient(135deg, #4A3D6E 0%, #5B4F8C 100%);
       color: #FFFFFF;
+      box-shadow: 0 2px 8px rgba(75, 65, 120, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.12);
     }
 
     .btn-primary {
       min-width: 200px;
     }
 
-    .btn-primary:hover:not(:disabled),
-    .btn-secondary:hover:not(:disabled) {
-      background: #3a1a45;
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.55);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: var(--accent-deep);
+      border-color: var(--border-input);
+      box-shadow: 0 1px 4px rgba(75, 65, 120, 0.06);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, #5B4F8C 0%, #6A5E9E 100%);
       transform: translateY(-2px);
-      box-shadow: 0 12px 28px rgba(37, 14, 44, 0.35);
+      box-shadow: var(--shadow-hover), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.85);
+      border-color: var(--accent-purple);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-hover);
     }
 
     .btn-primary:active:not(:disabled),
     .btn-secondary:active:not(:disabled) {
-      transform: translateY(0);
+      transform: translateY(0) scale(0.98);
     }
 
     .overlay {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(43, 47, 66, 0.45);
+      background: rgba(37, 42, 58, 0.38);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
       z-index: 1000;
       align-items: center;
       justify-content: center;
@@ -305,9 +374,12 @@
     }
 
     .modal {
-      background: #FFFFFF;
-      border-radius: 20px;
-      box-shadow: var(--shadow-card), 0 8px 20px rgba(141, 208, 252, 0.15);
+      background: var(--card-bg);
+      backdrop-filter: blur(28px) saturate(1.4);
+      -webkit-backdrop-filter: blur(28px) saturate(1.4);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-card), var(--glass-inner);
+      border: 1px solid var(--glass-border);
       padding: 2rem 2rem 1.75rem;
       max-width: 480px;
       width: 100%;
@@ -327,8 +399,10 @@
     @keyframes spin { to { transform: rotate(360deg); } }
 
     .modal-title {
+      font-family: var(--font-display);
       font-size: 18px;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: -0.01em;
       color: var(--text-primary);
       margin-bottom: 0.35rem;
     }
@@ -385,7 +459,7 @@
     .step-item.done .step-dot {
       background: var(--gradient-main);
       color: #FFFFFF;
-      box-shadow: 0 4px 12px rgba(141, 208, 252, 0.4);
+      box-shadow: 0 4px 14px rgba(123, 184, 232, 0.35);
     }
 
     .step-label {
@@ -397,8 +471,8 @@
 
     .step-item.active .step-label,
     .step-item.done .step-label {
-      color: var(--color-blue);
-      font-weight: 500;
+      color: var(--accent-deep);
+      font-weight: 600;
     }
 
     .modal-message {
@@ -415,7 +489,7 @@
     }
 
     .modal-timer strong {
-      color: var(--color-purple);
+      color: var(--accent-deep);
       font-weight: 600;
     }
 
@@ -423,8 +497,10 @@
     .view.active { display: block; }
 
     .section-title {
+      font-family: var(--font-display);
       font-size: 18px;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: -0.01em;
       color: var(--text-primary);
       margin-bottom: 0.75rem;
     }
@@ -438,13 +514,14 @@
     }
 
     .section-num {
-      font-family: 'Fredoka', 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-      font-size: 22px;
+      font-family: var(--font-display);
+      font-size: 20px;
       font-weight: 700;
-      color: var(--color-purple);
+      color: var(--accent-deep);
       line-height: 1;
       flex-shrink: 0;
-      letter-spacing: 0.02em;
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
     }
 
     .section-title-text {
@@ -481,17 +558,18 @@
 
     .summary-item strong {
       display: block;
-      color: var(--text-secondary);
-      font-size: 12px;
-      font-weight: 500;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.02em;
-      margin-bottom: 0.2rem;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.25rem;
     }
 
     .summary-text { color: var(--text-primary); word-break: break-word; }
 
-    .review-body {
+    .review-body,
+    #resSummary {
       font-size: 15px;
       color: var(--text-primary);
       white-space: pre-wrap;
@@ -527,8 +605,9 @@
     .paper-score {
       flex-shrink: 0;
       font-size: 13px;
-      color: var(--color-blue);
-      font-weight: 500;
+      color: var(--accent-deep);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
     }
 
     .paper-title-cn {
@@ -544,9 +623,12 @@
 
     .error-msg {
       display: none;
-      background: #FEF2F2;
-      color: #B91C1C;
-      border-radius: 10px;
+      background: rgba(254, 242, 244, 0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: #9E3D4A;
+      border: 1px solid rgba(196, 92, 106, 0.2);
+      border-radius: var(--radius-sm);
       padding: 12px 16px;
       font-size: 14px;
       margin-bottom: 1rem;
@@ -576,15 +658,18 @@
     .btn-ghost {
       height: 38px;
       padding: 0 18px;
-      border-radius: 10px;
+      border-radius: var(--radius-sm);
       font-size: 14px;
-      font-weight: 500;
-      font-family: inherit;
+      font-weight: 600;
+      font-family: var(--font-display);
       cursor: pointer;
-      background: transparent;
-      color: var(--text-primary);
-      border: 1.5px solid var(--color-purple);
-      transition: background 0.25s ease, color 0.25s ease, transform 0.2s ease, box-shadow 0.2s ease;
+      background: rgba(255, 255, 255, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: var(--accent-deep);
+      border: 1px solid var(--border-input);
+      box-shadow: 0 1px 4px rgba(75, 65, 120, 0.06);
+      transition: background 0.22s ease, color 0.22s ease, transform 0.2s ease, box-shadow 0.22s ease, border-color 0.22s ease;
     }
 
     .btn-ghost:hover:not(:disabled) {
@@ -592,7 +677,7 @@
       color: #FFFFFF;
       border-color: transparent;
       transform: translateY(-1px);
-      box-shadow: 0 8px 20px rgba(221, 180, 246, 0.35);
+      box-shadow: 0 6px 18px rgba(123, 184, 232, 0.28);
     }
 
     .btn-ghost-sm {
@@ -605,7 +690,9 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(43, 47, 66, 0.45);
+      background: rgba(37, 42, 58, 0.38);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
       z-index: 1100;
       align-items: center;
       justify-content: center;
@@ -618,11 +705,11 @@
 
     .auth-modal {
       background: var(--card-bg);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-radius: 20px;
-      box-shadow: var(--shadow-card), 0 8px 24px rgba(141, 208, 252, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.65);
+      backdrop-filter: blur(28px) saturate(1.4);
+      -webkit-backdrop-filter: blur(28px) saturate(1.4);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-card), var(--glass-inner);
+      border: 1px solid var(--glass-border);
       padding: 28px 28px 24px;
       max-width: 420px;
       width: 100%;
@@ -630,8 +717,10 @@
     }
 
     .auth-modal-title {
+      font-family: var(--font-display);
       font-size: 20px;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: -0.02em;
       margin-bottom: 1.25rem;
       text-align: center;
       color: var(--text-primary);
@@ -667,8 +756,8 @@
     .auth-switch button {
       background: none;
       border: none;
-      color: #8F6AD8;
-      font-weight: 500;
+      color: var(--accent-deep);
+      font-weight: 600;
       cursor: pointer;
       font-family: inherit;
       font-size: 13px;
@@ -682,9 +771,10 @@
 
     .auth-error {
       display: none;
-      background: #FEF2F2;
-      color: #B91C1C;
-      border-radius: 10px;
+      background: rgba(254, 242, 244, 0.85);
+      color: #9E3D4A;
+      border: 1px solid rgba(196, 92, 106, 0.2);
+      border-radius: var(--radius-sm);
       padding: 10px 14px;
       font-size: 13px;
       margin-bottom: 1rem;
@@ -704,8 +794,10 @@
     }
 
     .profile-header h2 {
+      font-family: var(--font-display);
       font-size: 22px;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: -0.02em;
       color: var(--text-primary);
     }
 
@@ -730,10 +822,19 @@
     }
 
     .history-item {
-      border-radius: 14px;
-      border: 1px solid var(--border-color);
-      background: rgba(255, 255, 255, 0.85);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--glass-border);
+      background: rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
       overflow: hidden;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .history-item.open {
+      border-color: rgba(184, 164, 232, 0.45);
+      box-shadow: 0 4px 16px rgba(75, 90, 140, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
     }
 
     .history-item-toggle {
@@ -751,7 +852,7 @@
     }
 
     .history-item-toggle:hover {
-      background: rgba(221, 180, 246, 0.08);
+      background: rgba(196, 176, 232, 0.1);
     }
 
     .history-item-meta {
@@ -813,6 +914,29 @@
       padding-top: 12px;
     }
 
+    .hint-text {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 1rem;
+    }
+
+    .paper-meta-muted {
+      margin-top: 0.25rem;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .paper-meta-secondary {
+      margin-top: 0.35rem;
+      color: var(--text-secondary);
+    }
+
+    .paper-meta-limit {
+      margin-top: 0.2rem;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
     @media (min-width: 600px) {
       .summary-grid { grid-template-columns: 1fr 1fr; }
       .summary-grid .span-full { grid-column: 1 / -1; }
@@ -824,6 +948,7 @@
     <div class="glow glow-top"></div>
     <div class="glow glow-bottom"></div>
   </div>
+  <div class="bg-noise" aria-hidden="true"></div>
 
   <div class="top-bar" id="topBar">
     <button type="button" class="btn-ghost" id="loginBtn">登录</button>
@@ -891,14 +1016,30 @@
             <strong>期刊名称</strong>
             <span class="summary-text" id="resJournals">—</span>
           </div>
+          <div class="summary-item">
+            <strong>抓取论文</strong>
+            <span class="summary-text" id="resFetched">—</span>
+          </div>
+          <div class="summary-item">
+            <strong>相关文献</strong>
+            <span class="summary-text" id="resRelevant">—</span>
+          </div>
+          <div class="summary-item">
+            <strong>推荐阅读</strong>
+            <span class="summary-text" id="resRecommended">—</span>
+          </div>
+          <div class="summary-item span-full" id="resRatioWrap" style="display:none;">
+            <strong>推荐占比</strong>
+            <span class="summary-text" id="resRatio">—</span>
+          </div>
         </div>
       </div>
       <div class="card">
         <h2 class="section-title section-title-numbered">
           <span class="section-num">02</span>
-          <span class="section-title-text">本次精选文献 <span id="resCount">0</span> 条</span>
+          <span class="section-title-text">推荐阅读 <span id="resCount">0</span> 条</span>
         </h2>
-        <p id="resOtherHint" style="font-size:13px;color:#6B7280;margin-bottom:1rem;display:none;"></p>
+        <p id="resOtherHint" class="hint-text" style="display:none;"></p>
       </div>
       <div class="card">
         <h2 class="section-title section-title-numbered">
@@ -910,7 +1051,7 @@
       <div class="card">
         <button type="button" class="papers-toggle-numbered" id="papersToggle" aria-expanded="false">
           <span class="section-num">04</span>
-          <span class="section-title-text">精选文献一览</span>
+          <span class="section-title-text">推荐阅读一览</span>
           <span class="chevron" id="papersChevron">▶</span>
         </button>
         <div class="papers-list" id="papersList"></div>
@@ -969,8 +1110,8 @@
       <div class="step-track" id="stepTrack">
         <div class="step-item" data-step="1"><span class="step-dot">1</span><span class="step-label">拆解兴趣</span></div>
         <div class="step-item" data-step="2"><span class="step-dot">2</span><span class="step-label">抓取论文</span></div>
-        <div class="step-item" data-step="3"><span class="step-dot">3</span><span class="step-label">AI筛选</span></div>
-        <div class="step-item" data-step="4"><span class="step-dot">4</span><span class="step-label">总结评分</span></div>
+        <div class="step-item" data-step="3"><span class="step-dot">3</span><span class="step-label">评估相关度</span></div>
+        <div class="step-item" data-step="4"><span class="step-dot">4</span><span class="step-label">深度点评</span></div>
         <div class="step-item" data-step="5"><span class="step-dot">5</span><span class="step-label">生成Excel</span></div>
       </div>
       <p class="modal-message" id="modalMessage">正在准备...</p>
@@ -1400,12 +1541,30 @@
         journalWrap.style.display = 'block';
         document.getElementById('resJournals').textContent = journals.join('、');
       } else { journalWrap.style.display = 'none'; }
+      const stats = data.search_stats || {};
+      const fetched = stats.fetched_count ?? '—';
+      const relevant = stats.relevant_count ?? '—';
+      const recommended = stats.recommended_count ?? '—';
+      document.getElementById('resFetched').textContent = typeof fetched === 'number' ? `${fetched} 篇` : fetched;
+      document.getElementById('resRelevant').textContent = typeof relevant === 'number' ? `${relevant} 篇` : relevant;
+      document.getElementById('resRecommended').textContent = typeof recommended === 'number' ? `${recommended} 篇` : recommended;
+      const ratioWrap = document.getElementById('resRatioWrap');
+      if (typeof stats.selection_ratio === 'number' && stats.relevant_count > 0) {
+        ratioWrap.style.display = 'block';
+        const pct = Math.round(stats.selection_ratio * 1000) / 10;
+        document.getElementById('resRatio').textContent = `推荐阅读占相关文献的 ${pct}%`;
+      } else {
+        ratioWrap.style.display = 'none';
+      }
       const papers = data.selected_papers || [];
       document.getElementById('resCount').textContent = String(papers.length);
       const otherHint = document.getElementById('resOtherHint');
-      if (data.other_papers_count > 0) {
+      const relCount = stats.relevant_count ?? 0;
+      const recCount = stats.recommended_count ?? papers.length;
+      if (relCount > 0) {
         otherHint.style.display = 'block';
-        otherHint.textContent = `另有 ${data.other_papers_count} 篇相关论文见 Excel Sheet3`;
+        otherHint.textContent =
+          `共 ${relCount} 篇相关文献已写入 Excel「全部相关论文」；下方为推荐指数最高的 ${recCount} 篇推荐阅读。`;
       } else { otherHint.style.display = 'none'; }
       document.getElementById('resSummary').textContent = data.summary || '';
       const sorted = [...papers].sort(
@@ -1420,8 +1579,24 @@
         const item = document.createElement('div');
         item.className = 'paper-item';
         const recIndex = p.recommendation_index ?? p.score ?? '';
+        const relScore = p.relevance_score;
         const recText = p.recommendation_text || '';
-        item.innerHTML = `<div class="paper-head"><span><span class="paper-seq">${String(i + 1).padStart(2, '0')}</span>${escapeHtml(p.title)}</span><span class="paper-score">推荐指数：${escapeHtml(String(recIndex))}</span></div><div class="paper-title-cn">${escapeHtml(p.title_cn)}</div><div class="paper-oneliner">${escapeHtml(p.one_liner)}</div>${recText ? `<div class="paper-oneliner" style="margin-top:0.35rem;color:#6B7280;">推荐理由：${escapeHtml(recText)}</div>` : ''}`;
+        const highlights = p.highlights || '';
+        const limitations = p.limitations || '';
+        let extra = '';
+        if (typeof relScore === 'number' || (relScore !== undefined && relScore !== '')) {
+          extra += `<div class="paper-oneliner paper-meta-muted">相关度（P2）：${escapeHtml(String(relScore))}${p.relevance_tier ? ' · ' + escapeHtml(p.relevance_tier) : ''}</div>`;
+        }
+        if (recText) {
+          extra += `<div class="paper-oneliner paper-meta-secondary">深度点评：${escapeHtml(recText)}</div>`;
+        }
+        if (highlights) {
+          extra += `<div class="paper-oneliner paper-meta-muted">亮点：${escapeHtml(highlights)}</div>`;
+        }
+        if (limitations) {
+          extra += `<div class="paper-oneliner paper-meta-limit">不足：${escapeHtml(limitations)}</div>`;
+        }
+        item.innerHTML = `<div class="paper-head"><span><span class="paper-seq">${String(i + 1).padStart(2, '0')}</span>${escapeHtml(p.title)}</span><span class="paper-score">推荐指数：${escapeHtml(String(recIndex))}</span></div><div class="paper-title-cn">${escapeHtml(p.title_cn)}</div><div class="paper-oneliner">${escapeHtml(p.one_liner)}</div>${extra}`;
         listEl.appendChild(item);
       });
     }
